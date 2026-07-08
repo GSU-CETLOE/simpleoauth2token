@@ -1,5 +1,5 @@
 [project]
-name = "oauth2client"
+name = "simpleoauth2token"
 version = "0.1.0"
 description = "Importable OAuth2 client with an mkcert-secured local callback server. Works with Google, Microsoft, D2L Brightspace, and any standard OAuth2 provider."
 readme = "README.md"
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-oauth2 = "oauth2client.cli:main"
+oauth2 = "simpleoauth2token.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]

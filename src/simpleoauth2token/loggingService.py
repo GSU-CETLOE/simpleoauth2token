@@ -1,4 +1,4 @@
-"""Logging service for oauth2client.
+"""Logging service for simpleoauth2token.
 
 Writes informational events (INFO, ERROR, ...) to working/logs/oauth2.log
 and echoes them to the console.
@@ -11,7 +11,7 @@ LOG_FILE_NAME = "oauth2.log"
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
-def getLogger(name: str = "oauth2client", workingDir: str | Path = "working") -> logging.Logger:
+def getLogger(name: str = "simpleoauth2token", workingDir: str | Path = "working") -> logging.Logger:
     """Return a logger that writes to <workingDir>/logs/oauth2.log and the console.
 
     Repeat calls with the same name return the same configured logger without

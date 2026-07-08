@@ -23,6 +23,7 @@ from .tokenStore import TokenStore, isExpired
 
 DEFAULT_CALLBACK_PORT = 8400
 REQUEST_TIMEOUT_SECONDS = 30
+SUPPORTED_GRANT_TYPES = ("authorization_code", "client_credentials")
 
 MANUAL_AUTHORIZATION_INSTRUCTIONS = """\
 Open this URL in a browser on any device and approve access:
@@ -66,6 +67,10 @@ class OAuth2Client:
 
     The first token must be obtained manually once, via client.authorize() or
     the `oauth2 authorize` command.
+
+    For service-to-service calls with no user, pass
+    grantType="client_credentials" — then getAccessToken() obtains and renews
+    tokens entirely on its own and no manual step is ever needed.
     """
 
     def __init__(
@@ -79,10 +84,17 @@ class OAuth2Client:
         redirectPort: int = DEFAULT_CALLBACK_PORT,
         tenant: str = "common",
         extraAuthParams: dict[str, str] | None = None,
+        grantType: str = "authorization_code",
     ) -> None:
+        if grantType not in SUPPORTED_GRANT_TYPES:
+            raise OAuth2Error(
+                f"Unknown grant type '{grantType}'. "
+                f"Supported grant types: {', '.join(SUPPORTED_GRANT_TYPES)}"
+            )
         if isinstance(provider, str):
             provider = getProvider(provider, tenant=tenant)
         self.provider = provider
+        self.grantType = grantType
         self.clientId = clientId
         self.clientSecret = clientSecret
         self.scopes = scopes.split() if isinstance(scopes, str) else list(scopes)
@@ -198,44 +210,94 @@ class OAuth2Client:
         )
         return token
 
+    def fetchClientCredentialsToken(self) -> dict[str, Any]:
+        """Obtain and save a token with the client credentials grant (no user).
+
+        For service-to-service calls where no human signs in (supported by
+        Microsoft and Brightspace; Google service accounts use a different JWT
+        flow that this library does not implement). The provider issues no
+        refresh token — renewing simply re-runs this grant.
+        """
+        payload = {
+            "grant_type": "client_credentials",
+            "client_id": self.clientId,
+            "client_secret": self.clientSecret,
+        }
+        if self.scopes:
+            payload["scope"] = " ".join(self.scopes)
+        response = self.postTokenRequest(payload)
+        token = self.normalizeToken(response, grantType="client_credentials")
+        self.tokenStore.save(self.tokenName, token)
+        self.logger.info(
+            "token '%s' obtained from provider '%s' with client credentials and saved",
+            self.tokenName, self.provider.name,
+        )
+        return token
+
     def refreshToken(self) -> dict[str, Any]:
-        """Use the stored refresh token to obtain and save a new access token."""
+        """Obtain and save a new access token for the stored token.
+
+        Authorization-code tokens are renewed with their refresh token;
+        client-credentials tokens are renewed by re-running their grant.
+        """
         stored = self.tokenStore.load(self.tokenName)
         if stored is None:
             self.logger.error("no stored token named '%s' to refresh", self.tokenName)
             raise OAuth2Error(
                 f"No stored token named '{self.tokenName}'; run authorize() first"
             )
-        refreshTokenValue = stored.get("refreshToken")
-        if not refreshTokenValue:
-            raise OAuth2Error(
-                f"Stored token '{self.tokenName}' has no refresh token; re-run authorize()"
-            )
-        response = self.postTokenRequest({
-            "grant_type": "refresh_token",
-            "refresh_token": refreshTokenValue,
-            "client_id": self.clientId,
-            "client_secret": self.clientSecret,
-        })
+        try:
+            if stored.get("grantType") == "client_credentials":
+                return self.fetchClientCredentialsToken()
+            refreshTokenValue = stored.get("refreshToken")
+            if not refreshTokenValue:
+                raise OAuth2Error(
+                    f"Stored token '{self.tokenName}' has no refresh token; re-run authorize()"
+                )
+            response = self.postTokenRequest({
+                "grant_type": "refresh_token",
+                "refresh_token": refreshTokenValue,
+                "client_id": self.clientId,
+                "client_secret": self.clientSecret,
+            })
+        except OAuth2Error as error:
+            # Client secrets expire (Azure enforces this), and a renewal that
+            # ran fine for months then fails with invalid_client is almost
+            # always that — point at the fix instead of the bare provider error.
+            if "invalid_client" in str(error):
+                raise OAuth2Error(
+                    f"{error} (the client secret may have been rotated or "
+                    f"expired; re-run authorize with current credentials)"
+                ) from error
+            raise
         token = self.normalizeToken(response, fallbackRefreshToken=refreshTokenValue)
         self.tokenStore.save(self.tokenName, token)
         self.logger.info("token '%s' refreshed", self.tokenName)
         return token
 
-    def getAccessToken(self) -> str:
+    def getAccessToken(self, forceRefresh: bool = False) -> str:
         """Return a valid access token, refreshing automatically if expired.
 
-        This is the everyday entry point for importing projects.
+        This is the everyday entry point for importing projects. Pass
+        forceRefresh=True to renew even an unexpired token — e.g. after an
+        API answered 401 because the token was revoked before its expiry.
         """
         stored = self.tokenStore.load(self.tokenName)
         if stored is None:
+            if self.grantType == "client_credentials":
+                self.logger.info(
+                    "no stored token named '%s'; fetching with client credentials",
+                    self.tokenName,
+                )
+                return self.fetchClientCredentialsToken()["accessToken"]
             self.logger.error("no stored token named '%s'", self.tokenName)
             raise OAuth2Error(
                 f"No stored token named '{self.tokenName}'; run authorize() or "
                 f"'oauth2 authorize' once to obtain the initial token"
             )
-        if isExpired(stored):
-            self.logger.info("token '%s' is expired; refreshing", self.tokenName)
+        if forceRefresh or isExpired(stored):
+            reason = "renewal forced" if forceRefresh else "is expired"
+            self.logger.info("token '%s' %s; refreshing", self.tokenName, reason)
             stored = self.refreshToken()
         return stored["accessToken"]
 
@@ -273,12 +335,16 @@ class OAuth2Client:
             return response.text.strip() or "no response body"
 
     def normalizeToken(
-        self, response: dict[str, Any], fallbackRefreshToken: str | None = None
+        self,
+        response: dict[str, Any],
+        fallbackRefreshToken: str | None = None,
+        grantType: str = "authorization_code",
     ) -> dict[str, Any]:
         """Convert a provider token response into the stored token format.
 
-        Client credentials are kept alongside the token so the CLI can refresh
-        without re-prompting; the file is saved owner-read-only.
+        The grant that produced the token is recorded so refreshToken() knows
+        how to renew it. Client id/secret are kept alongside the token so the
+        CLI can refresh without re-prompting; the file is saved owner-read-only.
         """
         if "access_token" not in response:
             raise OAuth2Error(f"Token response contained no access_token: {response}")
@@ -288,6 +354,7 @@ class OAuth2Client:
             "accessToken": response["access_token"],
             "refreshToken": response.get("refresh_token", fallbackRefreshToken),
             "tokenType": response.get("token_type", "Bearer"),
+            "grantType": grantType,
             "expiresAt": now + float(expiresIn) if expiresIn is not None else None,
             "obtainedAt": now,
             "scopes": self.scopes,

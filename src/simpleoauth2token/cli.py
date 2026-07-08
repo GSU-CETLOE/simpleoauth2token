@@ -40,8 +40,20 @@ def parseExtraAuthParams(pairs: list[str]) -> dict[str, str]:
 
 def runAuthorize(args: argparse.Namespace) -> int:
     """Handle `oauth2 authorize`: obtain and save the initial token."""
+    grantType = "client_credentials" if args.clientCredentials else "authorization_code"
+    if args.provider != "generic":
+        provider: ProviderConfig | str = args.provider
+    else:
+        # The client credentials grant never visits an authorization endpoint,
+        # so --auth-url is only required for the browser-based grant.
+        provider = ProviderConfig(
+            name="generic",
+            authorizationUrl=(args.authUrl or "") if args.clientCredentials
+                             else requireUrlArgument(args.authUrl, "--auth-url"),
+            tokenUrl=requireUrlArgument(args.tokenUrl, "--token-url"),
+        )
     client = OAuth2Client(
-        provider=args.provider,
+        provider=provider,
         clientId=args.clientId,
         clientSecret=args.clientSecret,
         scopes=args.scopes,
@@ -50,21 +62,11 @@ def runAuthorize(args: argparse.Namespace) -> int:
         redirectPort=args.port,
         tenant=args.tenant,
         extraAuthParams=parseExtraAuthParams(args.extraAuthParams),
-    ) if args.provider != "generic" else OAuth2Client(
-        provider=ProviderConfig(
-            name="generic",
-            authorizationUrl=requireUrlArgument(args.authUrl, "--auth-url"),
-            tokenUrl=requireUrlArgument(args.tokenUrl, "--token-url"),
-        ),
-        clientId=args.clientId,
-        clientSecret=args.clientSecret,
-        scopes=args.scopes,
-        tokenName=args.name,
-        workingDir=args.workingDir,
-        redirectPort=args.port,
-        extraAuthParams=parseExtraAuthParams(args.extraAuthParams),
+        grantType=grantType,
     )
-    if args.manual:
+    if args.clientCredentials:
+        token = client.fetchClientCredentialsToken()
+    elif args.manual:
         token = client.authorizeManual()
     else:
         token = client.authorize(openBrowser=not args.noBrowser, timeoutSeconds=args.timeout)
@@ -112,6 +114,7 @@ def runStatus(args: argparse.Namespace) -> int:
         return 1
     print(f"Token:         {args.name}")
     print(f"Provider:      {stored.get('provider', 'unknown')}")
+    print(f"Grant:         {stored.get('grantType', 'authorization_code')}")
     print(f"Scopes:        {' '.join(stored.get('scopes', []))}")
     print(f"Refresh token: {'present' if stored.get('refreshToken') else 'absent'}")
     expiresAt = stored.get("expiresAt")
@@ -203,6 +206,12 @@ def buildParser() -> argparse.ArgumentParser:
                            help="Headless mode: print the URL to open on another "
                                 "device, then paste the redirect URL back here "
                                 "(no local browser, callback server, or mkcert needed)")
+    authorize.add_argument("--client-credentials", dest="clientCredentials",
+                           action="store_true",
+                           help="Use the client credentials grant for "
+                                "service-to-service calls where no user signs in "
+                                "(Microsoft and Brightspace support it; no browser "
+                                "or callback server involved)")
     authorize.add_argument("--extra-auth-param", dest="extraAuthParams", action="append",
                            default=[], metavar="KEY=VALUE",
                            help="Extra authorization query parameter; repeatable "

@@ -1,4 +1,4 @@
-"""Exception types raised by oauth2client."""
+"""Exception types raised by simpleoauth2token."""
 
 
 class OAuth2Error(Exception):

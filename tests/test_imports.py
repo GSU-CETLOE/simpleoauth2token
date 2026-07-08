@@ -2,7 +2,7 @@
 
 
 def test_publicApiIsImportableFromPackageRoot():
-    from oauth2client import (
+    from simpleoauth2token import (
         CallbackServer,
         OAuth2Client,
         OAuth2Error,

@@ -9,8 +9,8 @@ import pytest
 import requests
 import trustme
 
-from oauth2client.callbackServer import CallbackServer
-from oauth2client.errors import OAuth2Error
+from simpleoauth2token.callbackServer import CallbackServer
+from simpleoauth2token.errors import OAuth2Error
 
 
 @pytest.fixture

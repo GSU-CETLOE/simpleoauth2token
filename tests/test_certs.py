@@ -2,7 +2,7 @@
 
 import pytest
 
-from oauth2client.certs import ensureCertificates, isMkcertInstalled
+from simpleoauth2token.certs import ensureCertificates, isMkcertInstalled
 
 requiresMkcert = pytest.mark.skipif(
     not isMkcertInstalled(), reason="mkcert is not installed on this machine"

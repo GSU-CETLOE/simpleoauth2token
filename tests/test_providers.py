@@ -2,8 +2,8 @@
 
 import pytest
 
-from oauth2client.errors import OAuth2Error
-from oauth2client.providers import ProviderConfig, getProvider, listProviders
+from simpleoauth2token.errors import OAuth2Error
+from simpleoauth2token.providers import ProviderConfig, getProvider, listProviders
 
 
 def test_googleProviderHasCorrectEndpoints():

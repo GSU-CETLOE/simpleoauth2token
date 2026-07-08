@@ -1,6 +1,6 @@
 """Tests for the logging service writing under working/logs."""
 
-from oauth2client.loggingService import getLogger
+from simpleoauth2token.loggingService import getLogger
 
 
 def test_loggerWritesInfoEventsToWorkingLogs(tmp_path):

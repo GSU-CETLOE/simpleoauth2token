@@ -6,10 +6,10 @@ import urllib.parse
 
 import pytest
 
-from oauth2client.client import OAuth2Client
-from oauth2client.errors import OAuth2Error
-from oauth2client.providers import ProviderConfig
-from oauth2client.tokenStore import TokenStore
+from simpleoauth2token.client import OAuth2Client
+from simpleoauth2token.errors import OAuth2Error
+from simpleoauth2token.providers import ProviderConfig
+from simpleoauth2token.tokenStore import TokenStore
 
 
 def makeClient(tokenEndpoint, tmp_path, **overrides) -> OAuth2Client:
@@ -81,6 +81,7 @@ def test_exchangeCodeForTokenNormalizesAndStoresToken(tokenEndpoint, tmp_path):
     assert token["accessToken"] == "initialAccessToken"
     assert token["refreshToken"] == "initialRefreshToken"
     assert token["tokenType"] == "Bearer"
+    assert token["grantType"] == "authorization_code"
     assert token["expiresAt"] > time.time()
 
     stored = TokenStore(workingDir=tmp_path / "working").load("testToken")
@@ -232,6 +233,110 @@ def test_authorizeManualRejectsEmptyInput(tokenEndpoint, tmp_path):
     client = makeClient(tokenEndpoint, tmp_path)
     with pytest.raises(OAuth2Error, match="[Nn]othing was entered"):
         client.authorizeManual(promptInput=lambda prompt: "   ")
+
+
+def test_fetchClientCredentialsTokenStoresTokenWithoutRefreshToken(tokenEndpoint, tmp_path):
+    client = makeClient(tokenEndpoint, tmp_path, grantType="client_credentials")
+    token = client.fetchClientCredentialsToken()
+
+    assert token["accessToken"] == "serviceAccessToken"
+    assert token["refreshToken"] is None
+    assert token["grantType"] == "client_credentials"
+
+    stored = TokenStore(workingDir=tmp_path / "working").load("testToken")
+    assert stored is not None
+    assert stored["accessToken"] == "serviceAccessToken"
+    assert stored["grantType"] == "client_credentials"
+
+    request = tokenEndpoint.recordedRequests[-1]
+    assert request["grant_type"] == "client_credentials"
+    assert request["client_id"] == "testClientId"
+    assert request["client_secret"] == "testClientSecret"
+    assert request["scope"] == "openid email"
+
+
+def test_fetchClientCredentialsTokenRaisesOnProviderError(tokenEndpoint, tmp_path):
+    client = makeClient(
+        tokenEndpoint, tmp_path, grantType="client_credentials", clientSecret="wrongSecret"
+    )
+    with pytest.raises(OAuth2Error, match="invalid_client"):
+        client.fetchClientCredentialsToken()
+
+
+def test_refreshTokenHintsAtRotatedSecretForClientCredentials(tokenEndpoint, tmp_path):
+    seedStoredToken(tmp_path, tokenEndpoint, refreshToken=None, grantType="client_credentials")
+    client = makeClient(tokenEndpoint, tmp_path, clientSecret="rotatedAwaySecret")
+    with pytest.raises(OAuth2Error, match="invalid_client.*rotated or expired"):
+        client.refreshToken()
+
+
+def test_refreshTokenHintsAtRotatedSecretForAuthorizationCode(tokenEndpoint, tmp_path):
+    seedStoredToken(tmp_path, tokenEndpoint)
+    client = makeClient(tokenEndpoint, tmp_path, clientSecret="rotatedAwaySecret")
+    with pytest.raises(OAuth2Error, match="invalid_client.*rotated or expired"):
+        client.refreshToken()
+
+
+def test_getAccessTokenForceRefreshRenewsValidToken(tokenEndpoint, tmp_path):
+    seedStoredToken(tmp_path, tokenEndpoint)
+    client = makeClient(tokenEndpoint, tmp_path)
+    accessToken = client.getAccessToken(forceRefresh=True)
+    assert accessToken == "refreshedAccessToken"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "refresh_token"
+
+
+def test_getAccessTokenForceRefreshRenewsValidClientCredentialsToken(tokenEndpoint, tmp_path):
+    seedStoredToken(
+        tmp_path, tokenEndpoint, refreshToken=None, grantType="client_credentials",
+    )
+    client = makeClient(tokenEndpoint, tmp_path, grantType="client_credentials")
+    accessToken = client.getAccessToken(forceRefresh=True)
+    assert accessToken == "serviceAccessToken"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_getAccessTokenFetchesClientCredentialsTokenWhenNoneStored(tokenEndpoint, tmp_path):
+    client = makeClient(tokenEndpoint, tmp_path, grantType="client_credentials")
+    accessToken = client.getAccessToken()
+    assert accessToken == "serviceAccessToken"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_getAccessTokenRenewsExpiredClientCredentialsToken(tokenEndpoint, tmp_path):
+    seedStoredToken(
+        tmp_path, tokenEndpoint,
+        expiresAt=time.time() - 10, refreshToken=None, grantType="client_credentials",
+    )
+    client = makeClient(tokenEndpoint, tmp_path, grantType="client_credentials")
+    accessToken = client.getAccessToken()
+    assert accessToken == "serviceAccessToken"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_refreshTokenRerunsClientCredentialsGrant(tokenEndpoint, tmp_path):
+    # A client built with the default grant (as `oauth2 refresh` does) must
+    # still renew a stored client-credentials token by re-running its grant.
+    seedStoredToken(
+        tmp_path, tokenEndpoint, refreshToken=None, grantType="client_credentials",
+    )
+    client = makeClient(tokenEndpoint, tmp_path)
+    token = client.refreshToken()
+    assert token["accessToken"] == "serviceAccessToken"
+    assert token["grantType"] == "client_credentials"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_clientRejectsUnknownGrantType(tmp_path):
+    with pytest.raises(OAuth2Error, match="[Gg]rant"):
+        OAuth2Client(
+            provider="google",
+            clientId="id",
+            clientSecret="secret",
+            scopes="openid",
+            tokenName="badGrant",
+            workingDir=tmp_path / "working",
+            grantType="password",
+        )
 
 
 def test_clientAcceptsProviderPresetName(tmp_path):

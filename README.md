@@ -1,8 +1,11 @@
-# oauth2client
+# simpleoauth2token
 
 An importable OAuth2 client for Python projects. It handles the manual
 first-time authorization in your browser over an **mkcert**-secured HTTPS
 callback, stores the token, and refreshes it automatically from then on.
+For service-to-service calls where no human signs in, it also supports the
+client credentials grant (see
+[Client credentials](#client-credentials-service-to-service-no-user)).
 
 Works with **Google**, **Microsoft**, **D2L Brightspace**, and any standard
 OAuth2 provider via the `generic` preset.
@@ -61,8 +64,44 @@ the token automatically using the refresh token.
 
 ## Using it from another project
 
+### Installing as a dependency
+
+The library is not on PyPI; add it to the consuming project as a path
+dependency:
+
+```bash
+uv add --editable /path/to/oauth2
+```
+
+which records it in that project's `pyproject.toml`:
+
+```toml
+[project]
+dependencies = ["simpleoauth2token"]
+
+[tool.uv.sources]
+simpleoauth2token = { path = "/path/to/oauth2", editable = true }
+```
+
+`--editable` makes changes in this repo visible to the consuming project
+immediately; drop it to install a snapshot instead. From a git remote, use
+`uv add git+https://github.com/you/oauth2`.
+
+> **Note:** the project was deliberately named `simpleoauth2token` (not
+> `oauth2client`) to avoid colliding with Google's long-deprecated
+> `oauth2client` package on PyPI. A bare
+> `dependencies = ["simpleoauth2token"]` without the `[tool.uv.sources]`
+> entry fails to resolve rather than silently installing the wrong package.
+
+The consuming project needs Python 3.13+ (`requires-python` here is
+`>=3.13`). Each consuming project gets its own `working/` directory —
+tokens do not follow the library, so authorize once per project or pass a
+shared `workingDir`.
+
+### Example
+
 ```python
-from oauth2client import OAuth2Client
+from simpleoauth2token import OAuth2Client
 
 client = OAuth2Client(
     provider="google",              # or "microsoft", "brightspace", or a ProviderConfig
@@ -76,10 +115,17 @@ client.authorize()                  # first time only — opens the browser
 accessToken = client.getAccessToken()  # every time after — auto-refreshes
 ```
 
+If an API rejects a token that has not expired yet (for example the provider
+revoked it early), renew it explicitly:
+
+```python
+accessToken = client.getAccessToken(forceRefresh=True)
+```
+
 Any provider not covered by a preset works through a `ProviderConfig`:
 
 ```python
-from oauth2client import OAuth2Client, ProviderConfig
+from simpleoauth2token import OAuth2Client, ProviderConfig
 
 client = OAuth2Client(
     provider=ProviderConfig(
@@ -92,6 +138,89 @@ client = OAuth2Client(
     scopes="read_api",
     tokenName="myGitlab",
 )
+```
+
+## Client credentials (service-to-service, no user)
+
+When your code calls an API as *itself* — a nightly sync job, a reporting
+service — no human is there to click a consent page. The client credentials
+grant exchanges the client id/secret directly for an access token: no
+browser, no callback server, no mkcert, and no manual first step. The
+provider issues no refresh token; renewing simply re-runs the grant, which
+`getAccessToken()` and `oauth2 refresh` do automatically.
+
+Supported by **Microsoft** and **D2L Brightspace**. Google service accounts
+use a different JWT-bearer flow that this library does not implement.
+
+### Microsoft
+
+Requirements from the Azure app registration:
+
+- The token request must go to **your tenant's** endpoint — pass
+  `tenant=...`; the default `common` endpoint rejects client credentials.
+- The app needs **application permissions** (not delegated) with admin
+  consent granted.
+- The scope must be the resource's `.default` scope, e.g.
+  `https://graph.microsoft.com/.default`.
+
+```python
+from simpleoauth2token import OAuth2Client
+
+client = OAuth2Client(
+    provider="microsoft",
+    tenant="yourtenant.onmicrosoft.com",
+    clientId="your-client-id",
+    clientSecret="your-client-secret",
+    scopes="https://graph.microsoft.com/.default",
+    tokenName="graphService",
+    grantType="client_credentials",
+)
+accessToken = client.getAccessToken()   # fetches and renews automatically
+```
+
+```bash
+uv run oauth2 authorize --client-credentials \
+    --provider microsoft --tenant yourtenant.onmicrosoft.com \
+    --client-id YOUR_ID --client-secret YOUR_SECRET \
+    --scopes "https://graph.microsoft.com/.default" \
+    --name graphService
+```
+
+### D2L Brightspace
+
+The app registration in Brightspace (Manage Extensibility > OAuth 2.0) must
+have the client credentials grant enabled; request the scopes the
+registration allows.
+
+```python
+from simpleoauth2token import OAuth2Client
+
+client = OAuth2Client(
+    provider="brightspace",
+    clientId="your-client-id",
+    clientSecret="your-client-secret",
+    scopes="core:*:*",
+    tokenName="brightspaceService",
+    grantType="client_credentials",
+)
+accessToken = client.getAccessToken()   # fetches and renews automatically
+```
+
+```bash
+uv run oauth2 authorize --client-credentials --provider brightspace \
+    --client-id YOUR_ID --client-secret YOUR_SECRET \
+    --scopes "core:*:*" \
+    --name brightspaceService
+```
+
+Any other provider that supports the grant works through `generic` —
+`--auth-url` is not needed because no authorization endpoint is ever visited:
+
+```bash
+uv run oauth2 authorize --client-credentials --provider generic \
+    --token-url https://provider.example.com/oauth/token \
+    --client-id YOUR_ID --client-secret YOUR_SECRET \
+    --scopes "some.scope" --name myService
 ```
 
 ## CLI commands
@@ -133,6 +262,8 @@ uv run oauth2 authorize --provider generic \
 Options: `--port` (callback port, default 8400), `--timeout` (seconds to wait
 for the browser, default 300), `--no-browser` (print the URL instead of
 opening a browser), `--manual` (headless mode, below),
+`--client-credentials` (service-to-service grant, no user — see
+[Client credentials](#client-credentials-service-to-service-no-user)),
 `--extra-auth-param KEY=VALUE` (repeatable).
 
 #### Headless servers: `oauth2 authorize --manual`
@@ -161,7 +292,13 @@ library, the same flow is `client.authorizeManual()`.
 
 ### `oauth2 refresh`
 
-Refresh a saved token using the credentials stored with it.
+Refresh a saved token using the credentials stored with it. Tokens obtained
+with `--client-credentials` are renewed by re-running that grant.
+
+If a refresh that used to work starts failing with `invalid_client`, the
+client secret has likely been rotated or expired (Azure secrets always
+expire) — the error says so, and the fix is re-running `oauth2 authorize`
+with current credentials.
 
 ```bash
 uv run oauth2 refresh --name myGoogle
@@ -169,7 +306,8 @@ uv run oauth2 refresh --name myGoogle
 
 ### `oauth2 status`
 
-Show a saved token's provider, scopes, refresh-token presence, and expiry.
+Show a saved token's provider, grant, scopes, refresh-token presence, and
+expiry.
 
 ```bash
 uv run oauth2 status --name myGoogle
@@ -210,6 +348,9 @@ saved, token refreshed, provider errors, and so on.
 - Token files under `working/tokens/` are saved owner-read-only (`0600`) and
   include the client id/secret so `oauth2 refresh` works without re-prompting.
   Keep `working/` out of version control (it is gitignored here).
+- Token writes are atomic (owner-only temp file renamed into place), so
+  concurrent processes sharing a working directory never read a partial
+  token and the secrets are never on disk with wider permissions.
 - The callback server binds to `127.0.0.1` only and accepts a single
   authorization response; the `state` parameter is validated to block CSRF.
 

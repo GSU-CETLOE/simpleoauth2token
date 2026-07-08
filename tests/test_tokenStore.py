@@ -1,9 +1,10 @@
 """Tests for token persistence under the working directory."""
 
 import stat
+import threading
 import time
 
-from oauth2client.tokenStore import TokenStore, isExpired
+from simpleoauth2token.tokenStore import TokenStore, isExpired
 
 
 def makeToken(**overrides) -> dict:
@@ -40,6 +41,44 @@ def test_savedFileIsOwnerReadWriteOnly(tmp_path):
     savedPath = store.save("myGoogle", makeToken())
     mode = stat.S_IMODE(savedPath.stat().st_mode)
     assert mode == 0o600
+
+
+def test_saveLeavesNoTemporaryFiles(tmp_path):
+    store = TokenStore(workingDir=tmp_path / "working")
+    store.save("myGoogle", makeToken())
+    store.save("myGoogle", makeToken(accessToken="overwritten"))
+    assert [path.name for path in store.tokensDir.iterdir()] == ["myGoogle.json"]
+
+
+def test_concurrentSaveAndLoadNeverObservesPartialToken(tmp_path):
+    """A reader racing a writer must always see a complete token.
+
+    Service tokens are renewed by unattended jobs, so two processes sharing a
+    working directory is the normal case, not the exception.
+    """
+    store = TokenStore(workingDir=tmp_path / "working")
+    store.save("myGoogle", makeToken())
+    stopReading = threading.Event()
+    failures = []
+
+    def loadRepeatedly() -> None:
+        while not stopReading.is_set():
+            try:
+                loaded = store.load("myGoogle")
+            except Exception as error:  # noqa: BLE001 - any reader error is the failure
+                failures.append(repr(error))
+                return
+            if loaded is None or "accessToken" not in loaded:
+                failures.append(f"partial token observed: {loaded!r}")
+                return
+
+    reader = threading.Thread(target=loadRepeatedly)
+    reader.start()
+    for iteration in range(500):
+        store.save("myGoogle", makeToken(accessToken=f"accessToken{iteration}"))
+    stopReading.set()
+    reader.join()
+    assert failures == []
 
 
 def test_loadMissingTokenReturnsNone(tmp_path):

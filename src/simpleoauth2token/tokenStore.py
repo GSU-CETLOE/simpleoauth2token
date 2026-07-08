@@ -1,6 +1,8 @@
 """Token persistence under <workingDir>/tokens, one JSON file per token."""
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -19,11 +21,23 @@ class TokenStore:
         return self.tokensDir / f"{name}.json"
 
     def save(self, name: str, token: dict[str, Any]) -> Path:
-        """Write the token as owner-read-only JSON and return its path."""
+        """Write the token as owner-read-only JSON and return its path.
+
+        The token is written to a temp file (created owner-only) and renamed
+        into place, so a concurrent reader always sees a complete token and
+        the secrets are never on disk with wider permissions.
+        """
         self.tokensDir.mkdir(parents=True, exist_ok=True)
         path = self.tokenPath(name)
-        path.write_text(json.dumps(token, indent=2), encoding="utf-8")
-        path.chmod(TOKEN_FILE_MODE)
+        fileDescriptor, tempName = tempfile.mkstemp(dir=self.tokensDir, suffix=".tmp")
+        try:
+            with os.fdopen(fileDescriptor, "w", encoding="utf-8") as tempFile:
+                tempFile.write(json.dumps(token, indent=2))
+            os.chmod(tempName, TOKEN_FILE_MODE)
+            os.replace(tempName, path)
+        except BaseException:
+            os.unlink(tempName)
+            raise
         return path
 
     def load(self, name: str) -> dict[str, Any] | None:

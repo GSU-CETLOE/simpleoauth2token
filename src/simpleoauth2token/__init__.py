@@ -1,10 +1,10 @@
-"""oauth2client: an importable OAuth2 client with an mkcert-secured local
+"""simpleoauth2token: an importable OAuth2 client with an mkcert-secured local
 callback server. Works with Google, Microsoft, D2L Brightspace, and any
 standard OAuth2 provider.
 
 Quick start::
 
-    from oauth2client import OAuth2Client
+    from simpleoauth2token import OAuth2Client
 
     client = OAuth2Client(
         provider="google",

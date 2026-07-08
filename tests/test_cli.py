@@ -4,8 +4,8 @@ headless authorization, which reads its input from stdin)."""
 import io
 import time
 
-from oauth2client.cli import main
-from oauth2client.tokenStore import TokenStore
+from simpleoauth2token.cli import main
+from simpleoauth2token.tokenStore import TokenStore
 
 
 def seedToken(workingDir, name="myGoogle", **overrides) -> dict:
@@ -59,6 +59,14 @@ def test_statusCommandReportsExpiredToken(tmp_path, capsys):
     exitCode = main(["status", "--name", "myGoogle", "--working-dir", str(tmp_path / "working")])
     assert exitCode == 0
     assert "expired" in capsys.readouterr().out.lower()
+
+
+def test_statusCommandShowsGrantType(tmp_path, capsys):
+    seedToken(tmp_path / "working", grantType="client_credentials", refreshToken=None)
+    exitCode = main(["status", "--name", "myGoogle", "--working-dir", str(tmp_path / "working")])
+    output = capsys.readouterr().out
+    assert exitCode == 0
+    assert "client_credentials" in output
 
 
 def test_statusCommandFailsForMissingToken(tmp_path, capsys):
@@ -120,3 +128,42 @@ def test_manualAuthorizeRejectsWrongState(tokenEndpoint, tmp_path, capsys, monke
     assert exitCode == 1
     assert "state mismatch" in capsys.readouterr().err.lower()
     assert TokenStore(workingDir=tmp_path / "working").load("headlessToken") is None
+
+
+def clientCredentialsArgs(tokenEndpoint, tmp_path) -> list[str]:
+    """CLI arguments for a client-credentials (no user) authorization.
+
+    Deliberately omits --auth-url: the client credentials grant never visits
+    an authorization endpoint, so the generic provider must not require one.
+    """
+    return [
+        "authorize", "--client-credentials",
+        "--provider", "generic",
+        "--token-url", tokenEndpoint.tokenUrl,
+        "--client-id", "testClientId",
+        "--client-secret", "testClientSecret",
+        "--scopes", "core:*:*",
+        "--name", "serviceToken",
+        "--working-dir", str(tmp_path / "working"),
+    ]
+
+
+def test_clientCredentialsAuthorizeSavesToken(tokenEndpoint, tmp_path, capsys):
+    exitCode = main(clientCredentialsArgs(tokenEndpoint, tmp_path))
+    output = capsys.readouterr().out
+    assert exitCode == 0
+    assert "serviceToken" in output
+    stored = TokenStore(workingDir=tmp_path / "working").load("serviceToken")
+    assert stored is not None
+    assert stored["accessToken"] == "serviceAccessToken"
+    assert stored["grantType"] == "client_credentials"
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_refreshCommandRenewsClientCredentialsToken(tokenEndpoint, tmp_path, capsys):
+    main(clientCredentialsArgs(tokenEndpoint, tmp_path))
+    capsys.readouterr()
+    exitCode = main(["refresh", "--name", "serviceToken", "--working-dir", str(tmp_path / "working")])
+    assert exitCode == 0
+    assert "refreshed" in capsys.readouterr().out
+    assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"

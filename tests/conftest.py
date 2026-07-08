@@ -22,7 +22,13 @@ class FakeTokenEndpointHandler(BaseHTTPRequestHandler):
         self.server.recordedRequests.append(params)  # type: ignore[attr-defined]
 
         grantType = params.get("grant_type")
-        if grantType == "authorization_code" and params.get("code") == "goodCode":
+        clientAuthenticated = params.get("client_secret") == "testClientSecret"
+        if grantType in ("refresh_token", "client_credentials") and not clientAuthenticated:
+            self.sendJson(400, {
+                "error": "invalid_client",
+                "error_description": "client authentication failed",
+            })
+        elif grantType == "authorization_code" and params.get("code") == "goodCode":
             self.sendJson(200, {
                 "access_token": "initialAccessToken",
                 "refresh_token": "initialRefreshToken",
@@ -32,6 +38,12 @@ class FakeTokenEndpointHandler(BaseHTTPRequestHandler):
         elif grantType == "refresh_token" and params.get("refresh_token") == "initialRefreshToken":
             self.sendJson(200, {
                 "access_token": "refreshedAccessToken",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            })
+        elif grantType == "client_credentials":
+            self.sendJson(200, {
+                "access_token": "serviceAccessToken",
                 "expires_in": 3600,
                 "token_type": "Bearer",
             })

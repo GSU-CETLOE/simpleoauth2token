@@ -8,7 +8,8 @@ update the matching checklist here.
 - [ ] `uv run pytest` — all tests pass, output pristine (no warnings/errors)
   - Covers: provider presets, token store persistence and permissions,
     logging service, HTTPS callback server (real TLS via trustme), client
-    token exchange/refresh against a real local endpoint, mkcert certificate
+    token exchange/refresh against a real local endpoint, the client
+    credentials grant (fetch, auto-renewal, CLI), mkcert certificate
     generation, and the non-interactive CLI commands.
 
 ## CLI walkthrough
@@ -57,6 +58,25 @@ Run these over SSH or in a terminal, treating it as a machine with no browser.
 - [ ] Pasting an empty line exits 1 with an error saying nothing was entered.
 - [ ] Works with mkcert not installed on the machine.
 
+### oauth2 authorize --client-credentials (service-to-service, no user)
+
+Use a Microsoft or Brightspace app registration set up for the client
+credentials grant (Google is not supported for this grant).
+
+- [ ] `uv run oauth2 authorize --client-credentials --provider microsoft --tenant <tenant> --client-id ... --client-secret ... --scopes "https://graph.microsoft.com/.default" --name serviceToken`
+      prints `Token 'serviceToken' saved.` with an expiry and exits 0 —
+      without opening a browser and without generating `working/certs/`.
+- [ ] Same with `--provider brightspace` and a Brightspace registration that
+      has the client credentials grant enabled.
+- [ ] `uv run oauth2 status --name serviceToken` shows
+      `Grant: client_credentials` and `Refresh token: absent`.
+- [ ] `uv run oauth2 refresh --name serviceToken` renews the token by
+      re-running the grant and exits 0.
+- [ ] A wrong client secret exits 1 with the provider's error printed and
+      logged as ERROR.
+- [ ] `--provider generic` works with only `--token-url` (no `--auth-url`
+      required).
+
 ### oauth2 status
 
 - [ ] `uv run oauth2 status --name testToken` shows provider, scopes,
@@ -71,6 +91,9 @@ Run these over SSH or in a terminal, treating it as a machine with no browser.
       `Token 'testToken' refreshed.` with a new expiry and exits 0.
 - [ ] `working/logs/oauth2.log` gains a `token 'testToken' refreshed` INFO event.
 - [ ] `uv run oauth2 refresh --name doesNotExist` exits 1 with an error.
+- [ ] After rotating the client secret at the provider, refresh exits 1 with
+      `invalid_client` plus the hint that the secret may have been rotated
+      or expired.
 
 ### oauth2 list
 
@@ -86,9 +109,14 @@ Run these over SSH or in a terminal, treating it as a machine with no browser.
 
 ## Library usage
 
-- [ ] In a separate project, `from oauth2client import OAuth2Client` works
+- [ ] In a separate project, `from simpleoauth2token import OAuth2Client` works
       and `getAccessToken()` returns the saved token without a browser.
 - [ ] With an expired access token and valid refresh token,
       `getAccessToken()` refreshes transparently and returns a new token.
 - [ ] With no saved token, `getAccessToken()` raises `OAuth2Error` telling
       you to run authorize.
+- [ ] With `grantType="client_credentials"` and no saved token,
+      `getAccessToken()` obtains a token on its own — no manual step, no
+      browser — and renews it after expiry the same way.
+- [ ] `getAccessToken(forceRefresh=True)` renews a token that has not
+      expired yet (use after an API answers 401 for a revoked token).
