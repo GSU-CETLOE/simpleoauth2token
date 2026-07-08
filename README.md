@@ -41,7 +41,7 @@ mkcert -install   # one-time: trusts the local CA in your system/browser
 Certificates are generated automatically into `working/certs/` the first time
 you authorize.
 
-> Headless server? Skip mkcert entirely and use `oauth2 authorize --manual`
+> Headless server? Skip mkcert entirely and use `simpleoauth2token authorize --manual`
 > (see below) — it needs no local browser, callback server, or certificates.
 
 ### 3. Install dependencies
@@ -56,42 +56,35 @@ uv sync
    **client secret**.
 2. Add the redirect URI `https://localhost:8400/callback` to the app
    registration (adjust the port if you pass `--port`).
-3. Run `oauth2 authorize`. Your browser opens the provider's consent page;
+3. Run `simpleoauth2token authorize`. Your browser opens the provider's consent page;
    after you approve, the token is captured and saved to `working/tokens/`.
 
-After that one manual step, `getAccessToken()` (or `oauth2 refresh`) renews
+After that one manual step, `getAccessToken()` (or `simpleoauth2token refresh`) renews
 the token automatically using the refresh token.
 
 ## Using it from another project
 
 ### Installing as a dependency
 
-The library is not on PyPI; add it to the consuming project as a path
-dependency:
+Install from [PyPI](https://pypi.org/project/simpleoauth2token/):
 
 ```bash
-uv add --editable /path/to/oauth2
+uv add simpleoauth2token
 ```
 
-which records it in that project's `pyproject.toml`:
+To work against a local checkout instead (changes in this repo become
+visible to the consuming project immediately), use a path dependency:
 
-```toml
-[project]
-dependencies = ["simpleoauth2token"]
-
-[tool.uv.sources]
-simpleoauth2token = { path = "/path/to/oauth2", editable = true }
+```bash
+uv add --editable /path/to/simpleoauth2token
 ```
 
-`--editable` makes changes in this repo visible to the consuming project
-immediately; drop it to install a snapshot instead. From a git remote, use
-`uv add git+https://github.com/you/oauth2`.
+or install straight from the repository:
+`uv add git+https://github.com/jebba2/simpleoauth2token`.
 
 > **Note:** the project was deliberately named `simpleoauth2token` (not
 > `oauth2client`) to avoid colliding with Google's long-deprecated
-> `oauth2client` package on PyPI. A bare
-> `dependencies = ["simpleoauth2token"]` without the `[tool.uv.sources]`
-> entry fails to resolve rather than silently installing the wrong package.
+> `oauth2client` package on PyPI.
 
 The consuming project needs Python 3.13+ (`requires-python` here is
 `>=3.13`). Each consuming project gets its own `working/` directory —
@@ -142,12 +135,12 @@ client = OAuth2Client(
 
 ## Client credentials (service-to-service, no user)
 
-When your code calls an API as *itself* — a nightly sync job, a reporting
+When your code calls an API as _itself_ — a nightly sync job, a reporting
 service — no human is there to click a consent page. The client credentials
 grant exchanges the client id/secret directly for an access token: no
 browser, no callback server, no mkcert, and no manual first step. The
 provider issues no refresh token; renewing simply re-runs the grant, which
-`getAccessToken()` and `oauth2 refresh` do automatically.
+`getAccessToken()` and `simpleoauth2token refresh` do automatically.
 
 Supported by **Microsoft** and **D2L Brightspace**. Google service accounts
 use a different JWT-bearer flow that this library does not implement.
@@ -179,7 +172,7 @@ accessToken = client.getAccessToken()   # fetches and renews automatically
 ```
 
 ```bash
-uv run oauth2 authorize --client-credentials \
+uv run simpleoauth2token authorize --client-credentials \
     --provider microsoft --tenant yourtenant.onmicrosoft.com \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "https://graph.microsoft.com/.default" \
@@ -207,7 +200,7 @@ accessToken = client.getAccessToken()   # fetches and renews automatically
 ```
 
 ```bash
-uv run oauth2 authorize --client-credentials --provider brightspace \
+uv run simpleoauth2token authorize --client-credentials --provider brightspace \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "core:*:*" \
     --name brightspaceService
@@ -217,7 +210,7 @@ Any other provider that supports the grant works through `generic` —
 `--auth-url` is not needed because no authorization endpoint is ever visited:
 
 ```bash
-uv run oauth2 authorize --client-credentials --provider generic \
+uv run simpleoauth2token authorize --client-credentials --provider generic \
     --token-url https://provider.example.com/oauth/token \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "some.scope" --name myService
@@ -227,32 +220,32 @@ uv run oauth2 authorize --client-credentials --provider generic \
 
 Every command accepts `--working-dir` (default: `./working`).
 
-### `oauth2 authorize`
+### `simpleoauth2token authorize`
 
 Run the manual first-time authorization in your browser.
 
 ```bash
 # Google — access_type=offline is required or Google won't issue a refresh token
-uv run oauth2 authorize --provider google \
+uv run simpleoauth2token authorize --provider google \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "openid email https://www.googleapis.com/auth/drive.readonly" \
     --name myGoogle \
     --extra-auth-param access_type=offline --extra-auth-param prompt=consent
 
 # Microsoft — include offline_access in scopes to receive a refresh token
-uv run oauth2 authorize --provider microsoft --tenant yourtenant.onmicrosoft.com \
+uv run simpleoauth2token authorize --provider microsoft --tenant yourtenant.onmicrosoft.com \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "offline_access User.Read" \
     --name myMicrosoft
 
 # D2L Brightspace
-uv run oauth2 authorize --provider brightspace \
+uv run simpleoauth2token authorize --provider brightspace \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "core:*:*" \
     --name myBrightspace
 
 # Any other OAuth2 provider
-uv run oauth2 authorize --provider generic \
+uv run simpleoauth2token authorize --provider generic \
     --auth-url https://provider.example.com/oauth/authorize \
     --token-url https://provider.example.com/oauth/token \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
@@ -266,13 +259,13 @@ opening a browser), `--manual` (headless mode, below),
 [Client credentials](#client-credentials-service-to-service-no-user)),
 `--extra-auth-param KEY=VALUE` (repeatable).
 
-#### Headless servers: `oauth2 authorize --manual`
+#### Headless servers: `simpleoauth2token authorize --manual`
 
 On a server with no browser (SSH session, container, CI box), add `--manual`
 to any of the commands above:
 
 ```bash
-uv run oauth2 authorize --manual --provider google \
+uv run simpleoauth2token authorize --manual --provider google \
     --client-id YOUR_ID --client-secret YOUR_SECRET \
     --scopes "openid email" --name myGoogle \
     --extra-auth-param access_type=offline --extra-auth-param prompt=consent
@@ -290,51 +283,51 @@ uv run oauth2 authorize --manual --provider google \
 Manual mode needs no local browser, no callback server, and no mkcert. From a
 library, the same flow is `client.authorizeManual()`.
 
-### `oauth2 refresh`
+### `simpleoauth2token refresh`
 
 Refresh a saved token using the credentials stored with it. Tokens obtained
 with `--client-credentials` are renewed by re-running that grant.
 
 If a refresh that used to work starts failing with `invalid_client`, the
 client secret has likely been rotated or expired (Azure secrets always
-expire) — the error says so, and the fix is re-running `oauth2 authorize`
+expire) — the error says so, and the fix is re-running `simpleoauth2token authorize`
 with current credentials.
 
 ```bash
-uv run oauth2 refresh --name myGoogle
+uv run simpleoauth2token refresh --name myGoogle
 ```
 
-### `oauth2 status`
+### `simpleoauth2token status`
 
 Show a saved token's provider, grant, scopes, refresh-token presence, and
 expiry.
 
 ```bash
-uv run oauth2 status --name myGoogle
+uv run simpleoauth2token status --name myGoogle
 ```
 
-### `oauth2 list`
+### `simpleoauth2token list`
 
 List all saved tokens.
 
 ```bash
-uv run oauth2 list
+uv run simpleoauth2token list
 ```
 
-### `oauth2 delete`
+### `simpleoauth2token delete`
 
 Delete a saved token.
 
 ```bash
-uv run oauth2 delete --name myGoogle
+uv run simpleoauth2token delete --name myGoogle
 ```
 
-### `oauth2 providers`
+### `simpleoauth2token providers`
 
 List the supported provider presets.
 
 ```bash
-uv run oauth2 providers
+uv run simpleoauth2token providers
 ```
 
 ## Logging
@@ -346,7 +339,7 @@ saved, token refreshed, provider errors, and so on.
 ## Security notes
 
 - Token files under `working/tokens/` are saved owner-read-only (`0600`) and
-  include the client id/secret so `oauth2 refresh` works without re-prompting.
+  include the client id/secret so `simpleoauth2token refresh` works without re-prompting.
   Keep `working/` out of version control (it is gitignored here).
 - Token writes are atomic (owner-only temp file renamed into place), so
   concurrent processes sharing a working directory never read a partial
@@ -363,3 +356,7 @@ uv run pytest
 Tests run against real local HTTP/HTTPS servers (no mocked behavior). The
 mkcert tests are skipped automatically on machines without mkcert. See
 [TESTPLAN.md](TESTPLAN.md) for the manual walkthrough.
+
+## License
+
+[MIT](LICENSE)

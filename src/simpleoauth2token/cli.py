@@ -1,14 +1,14 @@
-"""The oauth2 command-line interface.
+"""The simpleoauth2token command-line interface.
 
 Commands:
-    oauth2 authorize   Run the manual first-time authorization for a provider
-    oauth2 refresh     Refresh a saved token using its stored credentials
-    oauth2 status      Show a saved token's provider, scopes, and expiry
-    oauth2 list        List all saved tokens
-    oauth2 delete      Delete a saved token
-    oauth2 providers   List the supported provider presets
+    authorize   Run the manual first-time authorization for a provider
+    refresh     Refresh a saved token using its stored credentials
+    status      Show a saved token's provider, scopes, and expiry
+    list        List all saved tokens
+    delete      Delete a saved token
+    providers   List the supported provider presets
 
-Run `oauth2 <command> --help` for the options of each command.
+Run `simpleoauth2token <command> --help` for the options of each command.
 """
 
 import argparse
@@ -39,7 +39,7 @@ def parseExtraAuthParams(pairs: list[str]) -> dict[str, str]:
 
 
 def runAuthorize(args: argparse.Namespace) -> int:
-    """Handle `oauth2 authorize`: obtain and save the initial token."""
+    """Handle `simpleoauth2token authorize`: obtain and save the initial token."""
     grantType = "client_credentials" if args.clientCredentials else "authorization_code"
     if args.provider != "generic":
         provider: ProviderConfig | str = args.provider
@@ -83,7 +83,7 @@ def requireUrlArgument(value: str | None, flag: str) -> str:
 
 
 def runRefresh(args: argparse.Namespace) -> int:
-    """Handle `oauth2 refresh`: renew a saved token with its stored credentials."""
+    """Handle `simpleoauth2token refresh`: renew a saved token with its stored credentials."""
     stored = TokenStore(workingDir=args.workingDir).load(args.name)
     if stored is None:
         print(f"Error: no token named '{args.name}'", file=sys.stderr)
@@ -107,7 +107,7 @@ def runRefresh(args: argparse.Namespace) -> int:
 
 
 def runStatus(args: argparse.Namespace) -> int:
-    """Handle `oauth2 status`: report a saved token's details and validity."""
+    """Handle `simpleoauth2token status`: report a saved token's details and validity."""
     stored = TokenStore(workingDir=args.workingDir).load(args.name)
     if stored is None:
         print(f"Error: no token named '{args.name}'", file=sys.stderr)
@@ -128,7 +128,7 @@ def runStatus(args: argparse.Namespace) -> int:
 
 
 def runList(args: argparse.Namespace) -> int:
-    """Handle `oauth2 list`: show every saved token name."""
+    """Handle `simpleoauth2token list`: show every saved token name."""
     names = TokenStore(workingDir=args.workingDir).listTokens()
     if not names:
         print("No tokens saved yet.")
@@ -139,7 +139,7 @@ def runList(args: argparse.Namespace) -> int:
 
 
 def runDelete(args: argparse.Namespace) -> int:
-    """Handle `oauth2 delete`: remove a saved token."""
+    """Handle `simpleoauth2token delete`: remove a saved token."""
     if TokenStore(workingDir=args.workingDir).delete(args.name):
         print(f"Token '{args.name}' deleted.")
         return 0
@@ -148,7 +148,7 @@ def runDelete(args: argparse.Namespace) -> int:
 
 
 def runProviders(args: argparse.Namespace) -> int:
-    """Handle `oauth2 providers`: list the supported provider presets."""
+    """Handle `simpleoauth2token providers`: list the supported provider presets."""
     for name in listProviders():
         print(name)
     return 0
@@ -162,7 +162,7 @@ def printExpiry(token: dict[str, Any]) -> None:
 
 
 def buildParser() -> argparse.ArgumentParser:
-    """Construct the oauth2 argument parser with all subcommands."""
+    """Construct the simpleoauth2token argument parser with all subcommands."""
     commonArgs = argparse.ArgumentParser(add_help=False)
     commonArgs.add_argument(
         "--working-dir", dest="workingDir", default="working",
@@ -170,7 +170,7 @@ def buildParser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="oauth2",
+        prog="simpleoauth2token",
         description="Obtain and manage OAuth2 tokens for Google, Microsoft, "
                     "D2L Brightspace, or any OAuth2 provider.",
     )

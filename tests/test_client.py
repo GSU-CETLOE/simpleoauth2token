@@ -314,7 +314,7 @@ def test_getAccessTokenRenewsExpiredClientCredentialsToken(tokenEndpoint, tmp_pa
 
 
 def test_refreshTokenRerunsClientCredentialsGrant(tokenEndpoint, tmp_path):
-    # A client built with the default grant (as `oauth2 refresh` does) must
+    # A client built with the default grant (as `simpleoauth2token refresh` does) must
     # still renew a stored client-credentials token by re-running its grant.
     seedStoredToken(
         tmp_path, tokenEndpoint, refreshToken=None, grantType="client_credentials",

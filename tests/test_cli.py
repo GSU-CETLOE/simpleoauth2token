@@ -1,4 +1,4 @@
-"""Tests for the oauth2 CLI (non-interactive commands and the manual
+"""Tests for the simpleoauth2token CLI (non-interactive commands and the manual
 headless authorization, which reads its input from stdin)."""
 
 import io

@@ -16,16 +16,16 @@ update the matching checklist here.
 
 Prerequisites: `uv sync` done; mkcert installed and `mkcert -install` run.
 
-### oauth2 providers
+### simpleoauth2token providers
 
-- [ ] `uv run oauth2 providers` prints `brightspace`, `generic`, `google`,
+- [ ] `uv run simpleoauth2token providers` prints `brightspace`, `generic`, `google`,
       `microsoft` and exits 0.
 
-### oauth2 authorize
+### simpleoauth2token authorize
 
-- [ ] `uv run oauth2 authorize` with no flags exits non-zero and shows usage.
+- [ ] `uv run simpleoauth2token authorize` with no flags exits non-zero and shows usage.
 - [ ] Real provider run (use any one provider you have credentials for):
-      `uv run oauth2 authorize --provider google --client-id ... --client-secret ... --scopes "openid email" --name testToken --extra-auth-param access_type=offline --extra-auth-param prompt=consent`
+      `uv run simpleoauth2token authorize --provider google --client-id ... --client-secret ... --scopes "openid email" --name testToken --extra-auth-param access_type=offline --extra-auth-param prompt=consent`
   - [ ] First run generates `working/certs/localhost.pem` and logs the event.
   - [ ] Browser opens the provider consent page automatically.
   - [ ] After approving, the browser shows "Authorization complete".
@@ -41,11 +41,11 @@ Prerequisites: `uv sync` done; mkcert installed and `mkcert -install` run.
 - [ ] `--provider microsoft --tenant <tenant>` sends you to that tenant's
       login page.
 
-### oauth2 authorize --manual (headless)
+### simpleoauth2token authorize --manual (headless)
 
 Run these over SSH or in a terminal, treating it as a machine with no browser.
 
-- [ ] `uv run oauth2 authorize --manual --provider <provider> ...` prints the
+- [ ] `uv run simpleoauth2token authorize --manual --provider <provider> ...` prints the
       authorization URL and instructions, then waits at a paste prompt —
       without opening a browser and without generating `working/certs/`.
 - [ ] Opening the URL on another device and approving lands the browser on
@@ -58,52 +58,52 @@ Run these over SSH or in a terminal, treating it as a machine with no browser.
 - [ ] Pasting an empty line exits 1 with an error saying nothing was entered.
 - [ ] Works with mkcert not installed on the machine.
 
-### oauth2 authorize --client-credentials (service-to-service, no user)
+### simpleoauth2token authorize --client-credentials (service-to-service, no user)
 
 Use a Microsoft or Brightspace app registration set up for the client
 credentials grant (Google is not supported for this grant).
 
-- [ ] `uv run oauth2 authorize --client-credentials --provider microsoft --tenant <tenant> --client-id ... --client-secret ... --scopes "https://graph.microsoft.com/.default" --name serviceToken`
+- [ ] `uv run simpleoauth2token authorize --client-credentials --provider microsoft --tenant <tenant> --client-id ... --client-secret ... --scopes "https://graph.microsoft.com/.default" --name serviceToken`
       prints `Token 'serviceToken' saved.` with an expiry and exits 0 —
       without opening a browser and without generating `working/certs/`.
 - [ ] Same with `--provider brightspace` and a Brightspace registration that
       has the client credentials grant enabled.
-- [ ] `uv run oauth2 status --name serviceToken` shows
+- [ ] `uv run simpleoauth2token status --name serviceToken` shows
       `Grant: client_credentials` and `Refresh token: absent`.
-- [ ] `uv run oauth2 refresh --name serviceToken` renews the token by
+- [ ] `uv run simpleoauth2token refresh --name serviceToken` renews the token by
       re-running the grant and exits 0.
 - [ ] A wrong client secret exits 1 with the provider's error printed and
       logged as ERROR.
 - [ ] `--provider generic` works with only `--token-url` (no `--auth-url`
       required).
 
-### oauth2 status
+### simpleoauth2token status
 
-- [ ] `uv run oauth2 status --name testToken` shows provider, scopes,
+- [ ] `uv run simpleoauth2token status --name testToken` shows provider, scopes,
       `Refresh token: present`, and `valid until <timestamp>`; exits 0.
 - [ ] After the access token expires, status shows `expired at <timestamp>`.
-- [ ] `uv run oauth2 status --name doesNotExist` exits 1 with an error on
+- [ ] `uv run simpleoauth2token status --name doesNotExist` exits 1 with an error on
       stderr.
 
-### oauth2 refresh
+### simpleoauth2token refresh
 
-- [ ] `uv run oauth2 refresh --name testToken` prints
+- [ ] `uv run simpleoauth2token refresh --name testToken` prints
       `Token 'testToken' refreshed.` with a new expiry and exits 0.
 - [ ] `working/logs/oauth2.log` gains a `token 'testToken' refreshed` INFO event.
-- [ ] `uv run oauth2 refresh --name doesNotExist` exits 1 with an error.
+- [ ] `uv run simpleoauth2token refresh --name doesNotExist` exits 1 with an error.
 - [ ] After rotating the client secret at the provider, refresh exits 1 with
       `invalid_client` plus the hint that the secret may have been rotated
       or expired.
 
-### oauth2 list
+### simpleoauth2token list
 
-- [ ] `uv run oauth2 list` shows `testToken`; exits 0.
+- [ ] `uv run simpleoauth2token list` shows `testToken`; exits 0.
 - [ ] With an empty working dir (`--working-dir /tmp/emptydir`), prints
       `No tokens saved yet.` and exits 0.
 
-### oauth2 delete
+### simpleoauth2token delete
 
-- [ ] `uv run oauth2 delete --name testToken` prints
+- [ ] `uv run simpleoauth2token delete --name testToken` prints
       `Token 'testToken' deleted.` and removes the file; exits 0.
 - [ ] Running it again exits 1 with an error on stderr.
 

@@ -66,7 +66,7 @@ class OAuth2Client:
         accessToken = client.getAccessToken()   # refreshes automatically
 
     The first token must be obtained manually once, via client.authorize() or
-    the `oauth2 authorize` command.
+    the `simpleoauth2token authorize` command.
 
     For service-to-service calls with no user, pass
     grantType="client_credentials" — then getAccessToken() obtains and renews
@@ -293,7 +293,7 @@ class OAuth2Client:
             self.logger.error("no stored token named '%s'", self.tokenName)
             raise OAuth2Error(
                 f"No stored token named '{self.tokenName}'; run authorize() or "
-                f"'oauth2 authorize' once to obtain the initial token"
+                f"'simpleoauth2token authorize' once to obtain the initial token"
             )
         if forceRefresh or isExpired(stored):
             reason = "renewal forced" if forceRefresh else "is expired"

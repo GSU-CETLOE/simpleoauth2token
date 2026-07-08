@@ -3,13 +3,20 @@ name = "simpleoauth2token"
 version = "0.1.0"
 description = "Importable OAuth2 client with an mkcert-secured local callback server. Works with Google, Microsoft, D2L Brightspace, and any standard OAuth2 provider."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jeb Barger", email = "jebba2@gmail.com" }]
+keywords = ["oauth2", "oauth", "token", "mkcert", "client-credentials"]
 requires-python = ">=3.13"
 dependencies = [
     "requests>=2.32",
 ]
 
+[project.urls]
+Repository = "https://github.com/jebba2/simpleoauth2token"
+
 [project.scripts]
-oauth2 = "simpleoauth2token.cli:main"
+simpleoauth2token = "simpleoauth2token.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
