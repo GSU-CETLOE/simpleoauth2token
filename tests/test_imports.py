@@ -8,7 +8,9 @@ def test_publicApiIsImportableFromPackageRoot():
         OAuth2Error,
         ProviderConfig,
         TokenStore,
+        buildClientAssertion,
         ensureCertificates,
+        generateSigningKey,
         getLogger,
         getProvider,
     )
@@ -18,6 +20,8 @@ def test_publicApiIsImportableFromPackageRoot():
     assert ProviderConfig is not None
     assert TokenStore is not None
     assert CallbackServer is not None
+    assert buildClientAssertion is not None
     assert ensureCertificates is not None
+    assert generateSigningKey is not None
     assert getLogger is not None
     assert getProvider is not None

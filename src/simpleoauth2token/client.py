@@ -16,6 +16,7 @@ import requests
 
 from .callbackServer import CallbackServer
 from .certs import ensureCertificates
+from .clientAssertion import CLIENT_ASSERTION_TYPE, buildClientAssertion
 from .errors import OAuth2Error
 from .loggingService import getLogger
 from .providers import ProviderConfig, getProvider
@@ -70,26 +71,42 @@ class OAuth2Client:
 
     For service-to-service calls with no user, pass
     grantType="client_credentials" — then getAccessToken() obtains and renews
-    tokens entirely on its own and no manual step is ever needed.
+    tokens entirely on its own and no manual step is ever needed. Providers
+    that authenticate with JWT client assertions instead of a secret
+    (Brightspace service users) take privateKeyFile and keyId in place of
+    clientSecret.
     """
 
     def __init__(
         self,
         provider: ProviderConfig | str,
         clientId: str,
-        clientSecret: str,
-        scopes: list[str] | str,
-        tokenName: str,
+        clientSecret: str = "",
+        scopes: list[str] | str = "",
+        tokenName: str = "",
         workingDir: str | Path = "working",
         redirectPort: int = DEFAULT_CALLBACK_PORT,
         tenant: str = "common",
         extraAuthParams: dict[str, str] | None = None,
         grantType: str = "authorization_code",
+        privateKeyFile: str | Path | None = None,
+        keyId: str | None = None,
+        assertionAlgorithm: str = "ES256",
     ) -> None:
         if grantType not in SUPPORTED_GRANT_TYPES:
             raise OAuth2Error(
                 f"Unknown grant type '{grantType}'. "
                 f"Supported grant types: {', '.join(SUPPORTED_GRANT_TYPES)}"
+            )
+        if privateKeyFile is not None and not keyId:
+            raise OAuth2Error(
+                "privateKeyFile requires keyId — the 'kid' of this key in the "
+                "JWKS registered with the provider"
+            )
+        if grantType == "client_credentials" and not clientSecret and privateKeyFile is None:
+            raise OAuth2Error(
+                "The client credentials grant needs clientSecret or privateKeyFile "
+                "(plus keyId) to authenticate"
             )
         if isinstance(provider, str):
             provider = getProvider(provider, tenant=tenant)
@@ -102,6 +119,9 @@ class OAuth2Client:
         self.workingDir = Path(workingDir)
         self.redirectPort = redirectPort
         self.extraAuthParams = dict(extraAuthParams or {})
+        self.privateKeyFile = privateKeyFile
+        self.keyId = keyId
+        self.assertionAlgorithm = assertionAlgorithm
         self.tokenStore = TokenStore(workingDir=self.workingDir)
         self.logger = getLogger(workingDir=self.workingDir)
 
@@ -213,19 +233,48 @@ class OAuth2Client:
     def fetchClientCredentialsToken(self) -> dict[str, Any]:
         """Obtain and save a token with the client credentials grant (no user).
 
-        For service-to-service calls where no human signs in (supported by
-        Microsoft and Brightspace; Google service accounts use a different JWT
-        flow that this library does not implement). The provider issues no
-        refresh token — renewing simply re-runs this grant.
+        For service-to-service calls where no human signs in. The client
+        authenticates with its secret, or — when privateKeyFile is set — with
+        a signed JWT client assertion (RFC 7523), which is how Brightspace
+        service users work. The provider issues no refresh token — renewing
+        simply re-runs this grant. (Google service accounts use a different
+        JWT flow that this library does not implement.)
         """
         payload = {
             "grant_type": "client_credentials",
             "client_id": self.clientId,
-            "client_secret": self.clientSecret,
         }
+        if self.privateKeyFile is not None:
+            assert self.keyId is not None  # enforced in __init__
+            payload["client_assertion_type"] = CLIENT_ASSERTION_TYPE
+            payload["client_assertion"] = buildClientAssertion(
+                clientId=self.clientId,
+                tokenUrl=self.provider.tokenUrl,
+                privateKeyFile=self.privateKeyFile,
+                keyId=self.keyId,
+                algorithm=self.assertionAlgorithm,
+            )
+        else:
+            payload["client_secret"] = self.clientSecret
         if self.scopes:
             payload["scope"] = " ".join(self.scopes)
-        response = self.postTokenRequest(payload)
+        try:
+            response = self.postTokenRequest(payload)
+        except OAuth2Error as error:
+            # invalid_client here means the credential itself was rejected —
+            # point at the likely fix instead of the bare provider error.
+            if "invalid_client" in str(error):
+                if self.privateKeyFile is not None:
+                    raise OAuth2Error(
+                        f"{error} (the provider rejected the client assertion; "
+                        f"check that the registered JWKS is reachable and still "
+                        f"contains key '{self.keyId}')"
+                    ) from error
+                raise OAuth2Error(
+                    f"{error} (the client secret may have been rotated or "
+                    f"expired; re-run authorize with current credentials)"
+                ) from error
+            raise
         token = self.normalizeToken(response, grantType="client_credentials")
         self.tokenStore.save(self.tokenName, token)
         self.logger.info(
@@ -246,14 +295,15 @@ class OAuth2Client:
             raise OAuth2Error(
                 f"No stored token named '{self.tokenName}'; run authorize() first"
             )
+        if stored.get("grantType") == "client_credentials":
+            # Re-running the grant renews it; credential hints are added there.
+            return self.fetchClientCredentialsToken()
+        refreshTokenValue = stored.get("refreshToken")
+        if not refreshTokenValue:
+            raise OAuth2Error(
+                f"Stored token '{self.tokenName}' has no refresh token; re-run authorize()"
+            )
         try:
-            if stored.get("grantType") == "client_credentials":
-                return self.fetchClientCredentialsToken()
-            refreshTokenValue = stored.get("refreshToken")
-            if not refreshTokenValue:
-                raise OAuth2Error(
-                    f"Stored token '{self.tokenName}' has no refresh token; re-run authorize()"
-                )
             response = self.postTokenRequest({
                 "grant_type": "refresh_token",
                 "refresh_token": refreshTokenValue,
@@ -343,8 +393,11 @@ class OAuth2Client:
         """Convert a provider token response into the stored token format.
 
         The grant that produced the token is recorded so refreshToken() knows
-        how to renew it. Client id/secret are kept alongside the token so the
-        CLI can refresh without re-prompting; the file is saved owner-read-only.
+        how to renew it. The client id and its credential — the secret, or for
+        assertion-authenticated clients the private key *path*, key id, and
+        algorithm (never the key material) — are kept alongside the token so
+        the CLI can refresh without re-prompting; the file is saved
+        owner-read-only.
         """
         if "access_token" not in response:
             raise OAuth2Error(f"Token response contained no access_token: {response}")
@@ -363,5 +416,8 @@ class OAuth2Client:
             "tokenUrl": self.provider.tokenUrl,
             "clientId": self.clientId,
             "clientSecret": self.clientSecret,
+            "privateKeyFile": str(self.privateKeyFile) if self.privateKeyFile is not None else None,
+            "keyId": self.keyId,
+            "assertionAlgorithm": self.assertionAlgorithm if self.privateKeyFile is not None else None,
             "raw": response,
         }

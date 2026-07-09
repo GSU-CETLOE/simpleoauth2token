@@ -7,6 +7,7 @@ Commands:
     list        List all saved tokens
     delete      Delete a saved token
     providers   List the supported provider presets
+    keygen      Generate a signing key and JWKS for JWT client assertions
 
 Run `simpleoauth2token <command> --help` for the options of each command.
 """
@@ -14,9 +15,11 @@ Run `simpleoauth2token <command> --help` for the options of each command.
 import argparse
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from .client import DEFAULT_CALLBACK_PORT, OAuth2Client
+from .clientAssertion import SUPPORTED_ASSERTION_ALGORITHMS, generateSigningKey
 from .errors import OAuth2Error
 from .providers import ProviderConfig, listProviders
 from .tokenStore import TokenStore, isExpired
@@ -41,6 +44,21 @@ def parseExtraAuthParams(pairs: list[str]) -> dict[str, str]:
 def runAuthorize(args: argparse.Namespace) -> int:
     """Handle `simpleoauth2token authorize`: obtain and save the initial token."""
     grantType = "client_credentials" if args.clientCredentials else "authorization_code"
+    if args.privateKeyFile and not args.clientCredentials:
+        raise OAuth2Error(
+            "--private-key authenticates the client credentials grant; "
+            "add --client-credentials"
+        )
+    if args.privateKeyFile and not args.keyId:
+        raise OAuth2Error(
+            "--private-key requires --kid, the key id of this key in the "
+            "JWKS registered with the provider"
+        )
+    if not args.clientSecret and not args.privateKeyFile:
+        raise OAuth2Error(
+            "authorize requires --client-secret (or, for --client-credentials, "
+            "--private-key with --kid)"
+        )
     if args.provider != "generic":
         provider: ProviderConfig | str = args.provider
     else:
@@ -63,6 +81,9 @@ def runAuthorize(args: argparse.Namespace) -> int:
         tenant=args.tenant,
         extraAuthParams=parseExtraAuthParams(args.extraAuthParams),
         grantType=grantType,
+        privateKeyFile=args.privateKeyFile,
+        keyId=args.keyId,
+        assertionAlgorithm=args.assertionAlgorithm,
     )
     if args.clientCredentials:
         token = client.fetchClientCredentialsToken()
@@ -95,10 +116,13 @@ def runRefresh(args: argparse.Namespace) -> int:
             tokenUrl=stored["tokenUrl"],
         ),
         clientId=stored["clientId"],
-        clientSecret=stored["clientSecret"],
+        clientSecret=stored.get("clientSecret", ""),
         scopes=stored.get("scopes", []),
         tokenName=args.name,
         workingDir=args.workingDir,
+        privateKeyFile=stored.get("privateKeyFile"),
+        keyId=stored.get("keyId"),
+        assertionAlgorithm=stored.get("assertionAlgorithm") or "ES256",
     )
     token = client.refreshToken()
     print(f"Token '{args.name}' refreshed.")
@@ -117,6 +141,8 @@ def runStatus(args: argparse.Namespace) -> int:
     print(f"Grant:         {stored.get('grantType', 'authorization_code')}")
     print(f"Scopes:        {' '.join(stored.get('scopes', []))}")
     print(f"Refresh token: {'present' if stored.get('refreshToken') else 'absent'}")
+    if stored.get("privateKeyFile"):
+        print(f"Signing key:   {stored['privateKeyFile']} (kid {stored.get('keyId')})")
     expiresAt = stored.get("expiresAt")
     if expiresAt is None:
         print("Status:        valid (provider reported no expiry)")
@@ -154,6 +180,22 @@ def runProviders(args: argparse.Namespace) -> int:
     return 0
 
 
+def runKeygen(args: argparse.Namespace) -> int:
+    """Handle `simpleoauth2token keygen`: create a signing key and its JWKS."""
+    outputDir = args.outputDir or Path(args.workingDir) / "keys"
+    privateKeyPath, jwksPath = generateSigningKey(
+        keyId=args.keyId, algorithm=args.algorithm, outputDir=outputDir,
+    )
+    print(f"Private key (keep secret):  {privateKeyPath}")
+    print(f"Public JWKS:                {jwksPath}")
+    print()
+    print("Host the JWKS below at an HTTPS URL and register that URL with your")
+    print("provider (for Brightspace: the JWKS URL of the client-credentials app).")
+    print()
+    print(jwksPath.read_text())
+    return 0
+
+
 def printExpiry(token: dict[str, Any]) -> None:
     """Print when the given token expires, if known."""
     expiresAt = token.get("expiresAt")
@@ -184,8 +226,9 @@ def buildParser() -> argparse.ArgumentParser:
                            help=f"Provider preset: {', '.join(listProviders())}")
     authorize.add_argument("--client-id", dest="clientId", required=True,
                            help="OAuth2 client id from your provider's app registration")
-    authorize.add_argument("--client-secret", dest="clientSecret", required=True,
-                           help="OAuth2 client secret from your provider's app registration")
+    authorize.add_argument("--client-secret", dest="clientSecret", default="",
+                           help="OAuth2 client secret from your provider's app "
+                                "registration (not needed with --private-key)")
     authorize.add_argument("--scopes", required=True,
                            help="Space-separated scopes, quoted (e.g. \"openid email\")")
     authorize.add_argument("--name", required=True,
@@ -216,6 +259,18 @@ def buildParser() -> argparse.ArgumentParser:
                            default=[], metavar="KEY=VALUE",
                            help="Extra authorization query parameter; repeatable "
                                 "(e.g. access_type=offline for Google refresh tokens)")
+    authorize.add_argument("--private-key", dest="privateKeyFile",
+                           help="PEM private key for JWT client-assertion "
+                                "authentication instead of a client secret "
+                                "(Brightspace service users; requires "
+                                "--client-credentials and --kid)")
+    authorize.add_argument("--kid", dest="keyId",
+                           help="Key id of the private key in the JWKS "
+                                "registered with the provider")
+    authorize.add_argument("--assertion-algorithm", dest="assertionAlgorithm",
+                           default="ES256", choices=SUPPORTED_ASSERTION_ALGORITHMS,
+                           help="JWT signing algorithm for client assertions "
+                                "(default: ES256)")
     authorize.set_defaults(handler=runAuthorize)
 
     refresh = subparsers.add_parser(
@@ -247,6 +302,21 @@ def buildParser() -> argparse.ArgumentParser:
         "providers", parents=[commonArgs], help="List supported provider presets",
     )
     providers.set_defaults(handler=runProviders)
+
+    keygen = subparsers.add_parser(
+        "keygen", parents=[commonArgs],
+        help="Generate a signing key and JWKS for providers that require "
+             "JWT client assertions (e.g. Brightspace service users)",
+    )
+    keygen.add_argument("--kid", dest="keyId", required=True,
+                        help="Key id to stamp into the key and JWKS")
+    keygen.add_argument("--algorithm", default="ES256",
+                        choices=SUPPORTED_ASSERTION_ALGORITHMS,
+                        help="Signing algorithm the key will be used with "
+                             "(default: ES256)")
+    keygen.add_argument("--out", dest="outputDir",
+                        help="Output directory (default: <working-dir>/keys)")
+    keygen.set_defaults(handler=runKeygen)
 
     return parser
 

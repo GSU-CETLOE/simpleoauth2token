@@ -1,12 +1,15 @@
 """Tests for OAuth2Client against a real local token endpoint (no mocks)."""
 
+import json
 import re
 import time
 import urllib.parse
 
+import jwt
 import pytest
 
 from simpleoauth2token.client import OAuth2Client
+from simpleoauth2token.clientAssertion import CLIENT_ASSERTION_TYPE, generateSigningKey
 from simpleoauth2token.errors import OAuth2Error
 from simpleoauth2token.providers import ProviderConfig
 from simpleoauth2token.tokenStore import TokenStore
@@ -357,3 +360,111 @@ def test_clientAcceptsScopesAsString(tokenEndpoint, tmp_path):
     url = client.buildAuthorizationUrl(state="s")
     params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
     assert params["scope"] == "openid email"
+
+
+def registerSigningKey(tokenEndpoint, tmp_path, keyId="testKey"):
+    """Generate a signing key and register its public JWK with the endpoint,
+    mirroring how an admin registers a JWKS URL with a real provider."""
+    privateKeyPath, jwksPath = generateSigningKey(
+        keyId=keyId, algorithm="ES256", outputDir=tmp_path / "keys",
+    )
+    jwk = json.loads(jwksPath.read_text())["keys"][0]
+    tokenEndpoint.registerAssertionJwk(jwk)
+    return privateKeyPath, jwk
+
+
+def makeAssertionClient(tokenEndpoint, tmp_path, privateKeyPath, **overrides) -> OAuth2Client:
+    """A client-credentials client that authenticates with a JWT assertion."""
+    settings = {
+        "clientSecret": "",
+        "grantType": "client_credentials",
+        "privateKeyFile": privateKeyPath,
+        "keyId": "testKey",
+    }
+    settings.update(overrides)
+    return makeClient(tokenEndpoint, tmp_path, **settings)
+
+
+def test_fetchClientCredentialsTokenWithClientAssertion(tokenEndpoint, tmp_path):
+    privateKeyPath, jwk = registerSigningKey(tokenEndpoint, tmp_path)
+    client = makeAssertionClient(tokenEndpoint, tmp_path, privateKeyPath)
+    token = client.fetchClientCredentialsToken()
+    assert token["accessToken"] == "serviceAccessToken"
+    request = tokenEndpoint.recordedRequests[-1]
+    assert request["client_assertion_type"] == CLIENT_ASSERTION_TYPE
+    assert "client_secret" not in request
+    claims = jwt.decode(
+        request["client_assertion"], jwt.PyJWK(jwk).key,
+        algorithms=["ES256"], audience=tokenEndpoint.tokenUrl,
+    )
+    assert claims["iss"] == "testClientId"
+    assert claims["sub"] == "testClientId"
+
+
+def test_assertionTokenStoresKeyPathForRenewal(tokenEndpoint, tmp_path):
+    privateKeyPath, _ = registerSigningKey(tokenEndpoint, tmp_path)
+    client = makeAssertionClient(tokenEndpoint, tmp_path, privateKeyPath)
+    client.fetchClientCredentialsToken()
+    stored = TokenStore(workingDir=tmp_path / "working").load("testToken")
+    assert stored is not None
+    assert stored["privateKeyFile"] == str(privateKeyPath)
+    assert stored["keyId"] == "testKey"
+    assert stored["assertionAlgorithm"] == "ES256"
+    assert stored["clientSecret"] == ""
+
+
+def test_assertionSignedByUnregisteredKeyIsRejected(tokenEndpoint, tmp_path):
+    registerSigningKey(tokenEndpoint, tmp_path, keyId="registeredKey")
+    rogueKeyPath, _ = generateSigningKey(
+        keyId="testKey", algorithm="ES256", outputDir=tmp_path / "rogueKeys",
+    )
+    client = makeAssertionClient(tokenEndpoint, tmp_path, rogueKeyPath)
+    with pytest.raises(OAuth2Error, match="JWKS"):
+        client.fetchClientCredentialsToken()
+
+
+def test_refreshTokenRerunsAssertionGrantFromStoredKeyPath(tokenEndpoint, tmp_path):
+    privateKeyPath, _ = registerSigningKey(tokenEndpoint, tmp_path)
+    seedStoredToken(
+        tmp_path, tokenEndpoint, refreshToken=None, grantType="client_credentials",
+        clientSecret="", privateKeyFile=str(privateKeyPath),
+        keyId="testKey", assertionAlgorithm="ES256",
+    )
+    client = makeAssertionClient(tokenEndpoint, tmp_path, privateKeyPath)
+    token = client.refreshToken()
+    assert token["accessToken"] == "serviceAccessToken"
+    request = tokenEndpoint.recordedRequests[-1]
+    assert request["grant_type"] == "client_credentials"
+    assert "client_assertion" in request
+
+
+def test_getAccessTokenFetchesAssertionTokenWhenNoneStored(tokenEndpoint, tmp_path):
+    privateKeyPath, _ = registerSigningKey(tokenEndpoint, tmp_path)
+    client = makeAssertionClient(tokenEndpoint, tmp_path, privateKeyPath)
+    assert client.getAccessToken() == "serviceAccessToken"
+    assert "client_assertion" in tokenEndpoint.recordedRequests[-1]
+
+
+def test_clientRequiresKeyIdWithPrivateKey(tmp_path):
+    with pytest.raises(OAuth2Error, match="keyId"):
+        OAuth2Client(
+            provider="brightspace",
+            clientId="id",
+            scopes="core:*:*",
+            tokenName="assertionToken",
+            workingDir=tmp_path / "working",
+            grantType="client_credentials",
+            privateKeyFile=tmp_path / "key.pem",
+        )
+
+
+def test_clientCredentialsRequiresSecretOrPrivateKey(tmp_path):
+    with pytest.raises(OAuth2Error, match="clientSecret or privateKeyFile"):
+        OAuth2Client(
+            provider="brightspace",
+            clientId="id",
+            scopes="core:*:*",
+            tokenName="assertionToken",
+            workingDir=tmp_path / "working",
+            grantType="client_credentials",
+        )

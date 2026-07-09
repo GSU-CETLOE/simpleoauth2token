@@ -2,6 +2,7 @@
 headless authorization, which reads its input from stdin)."""
 
 import io
+import json
 import time
 
 from simpleoauth2token.cli import main
@@ -167,3 +168,114 @@ def test_refreshCommandRenewsClientCredentialsToken(tokenEndpoint, tmp_path, cap
     assert exitCode == 0
     assert "refreshed" in capsys.readouterr().out
     assert tokenEndpoint.recordedRequests[-1]["grant_type"] == "client_credentials"
+
+
+def test_keygenCommandWritesKeyAndPrintsJwks(tmp_path, capsys):
+    workingDir = str(tmp_path / "working")
+    exitCode = main(["keygen", "--kid", "serviceKey", "--working-dir", workingDir])
+    output = capsys.readouterr().out
+    assert exitCode == 0
+    privateKeyPath = tmp_path / "working" / "keys" / "serviceKey.pem"
+    jwksPath = tmp_path / "working" / "keys" / "serviceKey.jwks.json"
+    assert privateKeyPath.exists()
+    assert jwksPath.exists()
+    assert str(privateKeyPath) in output
+    assert '"keys"' in output          # the JWKS to host is printed
+    assert "https" in output.lower()   # ...with the hosting instruction
+
+
+def test_keygenCommandRefusesToOverwrite(tmp_path, capsys):
+    workingDir = str(tmp_path / "working")
+    main(["keygen", "--kid", "serviceKey", "--working-dir", workingDir])
+    capsys.readouterr()
+    exitCode = main(["keygen", "--kid", "serviceKey", "--working-dir", workingDir])
+    assert exitCode == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def assertionAuthorizeArgs(tokenEndpoint, tmp_path, privateKeyPath) -> list[str]:
+    """CLI arguments for client-credentials authorization with a JWT assertion
+    instead of a client secret (as Brightspace service users require)."""
+    return [
+        "authorize", "--client-credentials",
+        "--provider", "generic",
+        "--token-url", tokenEndpoint.tokenUrl,
+        "--client-id", "testClientId",
+        "--private-key", str(privateKeyPath),
+        "--kid", "serviceKey",
+        "--scopes", "core:*:*",
+        "--name", "assertionToken",
+        "--working-dir", str(tmp_path / "working"),
+    ]
+
+
+def generateCliSigningKey(tokenEndpoint, tmp_path, capsys):
+    """Run keygen and register the resulting public JWK with the endpoint."""
+    main(["keygen", "--kid", "serviceKey", "--working-dir", str(tmp_path / "working")])
+    capsys.readouterr()
+    jwksPath = tmp_path / "working" / "keys" / "serviceKey.jwks.json"
+    tokenEndpoint.registerAssertionJwk(json.loads(jwksPath.read_text())["keys"][0])
+    return tmp_path / "working" / "keys" / "serviceKey.pem"
+
+
+def test_clientCredentialsAuthorizeWithPrivateKey(tokenEndpoint, tmp_path, capsys):
+    privateKeyPath = generateCliSigningKey(tokenEndpoint, tmp_path, capsys)
+    exitCode = main(assertionAuthorizeArgs(tokenEndpoint, tmp_path, privateKeyPath))
+    output = capsys.readouterr().out
+    assert exitCode == 0
+    assert "assertionToken" in output
+    stored = TokenStore(workingDir=tmp_path / "working").load("assertionToken")
+    assert stored is not None
+    assert stored["privateKeyFile"] == str(privateKeyPath)
+    request = tokenEndpoint.recordedRequests[-1]
+    assert "client_assertion" in request
+    assert "client_secret" not in request
+
+
+def test_refreshCommandRenewsAssertionTokenFromStoredKeyPath(tokenEndpoint, tmp_path, capsys):
+    privateKeyPath = generateCliSigningKey(tokenEndpoint, tmp_path, capsys)
+    main(assertionAuthorizeArgs(tokenEndpoint, tmp_path, privateKeyPath))
+    capsys.readouterr()
+    exitCode = main(["refresh", "--name", "assertionToken", "--working-dir", str(tmp_path / "working")])
+    assert exitCode == 0
+    assert "refreshed" in capsys.readouterr().out
+    assert "client_assertion" in tokenEndpoint.recordedRequests[-1]
+
+
+def test_authorizeRequiresSecretOrPrivateKey(tokenEndpoint, tmp_path, capsys):
+    args = clientCredentialsArgs(tokenEndpoint, tmp_path)
+    secretIndex = args.index("--client-secret")
+    del args[secretIndex:secretIndex + 2]
+    exitCode = main(args)
+    assert exitCode == 1
+    assert "--client-secret" in capsys.readouterr().err
+
+
+def test_privateKeyRequiresClientCredentials(tokenEndpoint, tmp_path, capsys):
+    args = manualAuthorizeArgs(tokenEndpoint, tmp_path)
+    args += ["--private-key", str(tmp_path / "key.pem"), "--kid", "serviceKey"]
+    exitCode = main(args)
+    assert exitCode == 1
+    assert "--client-credentials" in capsys.readouterr().err
+
+
+def test_privateKeyRequiresKid(tokenEndpoint, tmp_path, capsys):
+    privateKeyPath = generateCliSigningKey(tokenEndpoint, tmp_path, capsys)
+    args = assertionAuthorizeArgs(tokenEndpoint, tmp_path, privateKeyPath)
+    kidIndex = args.index("--kid")
+    del args[kidIndex:kidIndex + 2]
+    exitCode = main(args)
+    assert exitCode == 1
+    assert "--kid" in capsys.readouterr().err
+
+
+def test_statusCommandShowsSigningKey(tmp_path, capsys):
+    seedToken(
+        tmp_path / "working", grantType="client_credentials", refreshToken=None,
+        privateKeyFile="/keys/serviceKey.pem", keyId="serviceKey",
+    )
+    exitCode = main(["status", "--name", "myGoogle", "--working-dir", str(tmp_path / "working")])
+    output = capsys.readouterr().out
+    assert exitCode == 0
+    assert "/keys/serviceKey.pem" in output
+    assert "serviceKey" in output

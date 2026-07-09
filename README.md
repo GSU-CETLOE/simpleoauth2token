@@ -137,13 +137,16 @@ client = OAuth2Client(
 
 When your code calls an API as _itself_ — a nightly sync job, a reporting
 service — no human is there to click a consent page. The client credentials
-grant exchanges the client id/secret directly for an access token: no
+grant exchanges the client's credential directly for an access token: no
 browser, no callback server, no mkcert, and no manual first step. The
 provider issues no refresh token; renewing simply re-runs the grant, which
 `getAccessToken()` and `simpleoauth2token refresh` do automatically.
 
-Supported by **Microsoft** and **D2L Brightspace**. Google service accounts
-use a different JWT-bearer flow that this library does not implement.
+The client authenticates with its **secret** (Microsoft, generic providers)
+or, where the provider requires it, with a **JWT client assertion** signed by
+a private key (RFC 7523 — how **D2L Brightspace** service users work). Google
+service accounts use a different JWT-bearer flow that this library does not
+implement.
 
 ### Microsoft
 
@@ -179,11 +182,28 @@ uv run simpleoauth2token authorize --client-credentials \
     --name graphService
 ```
 
-### D2L Brightspace
+### D2L Brightspace (JWT client assertions + service users)
 
-The app registration in Brightspace (Manage Extensibility > OAuth 2.0) must
-have the client credentials grant enabled; request the scopes the
-registration allows.
+Brightspace client-credentials applications have **no client secret**: every
+token request authenticates with a short-lived JWT signed by your private
+key, which Brightspace validates against a public **JWKS** hosted at an HTTPS
+URL you register. Setup, following
+[D2L's service-user documentation](https://community.d2l.com/brightspace/kb/articles/34318-service-users-and-server-to-server-authentication-for-brightspace):
+
+1. Generate a signing key and its JWKS:
+
+   ```bash
+   uv run simpleoauth2token keygen --kid myServiceKey
+   ```
+
+   This writes `working/keys/myServiceKey.pem` (private, keep it secret) and
+   `working/keys/myServiceKey.jwks.json` (public).
+
+2. Host the JWKS JSON at an HTTPS URL (any static hosting works).
+3. In Brightspace (Manage Extensibility > OAuth 2.0), create a **service
+   user**, register an application with the **Client Credentials** grant,
+   give it the JWKS URL, and link the service user to it.
+4. Authorize with the key instead of a secret:
 
 ```python
 from simpleoauth2token import OAuth2Client
@@ -191,20 +211,27 @@ from simpleoauth2token import OAuth2Client
 client = OAuth2Client(
     provider="brightspace",
     clientId="your-client-id",
-    clientSecret="your-client-secret",
     scopes="core:*:*",
     tokenName="brightspaceService",
     grantType="client_credentials",
+    privateKeyFile="working/keys/myServiceKey.pem",
+    keyId="myServiceKey",
 )
 accessToken = client.getAccessToken()   # fetches and renews automatically
 ```
 
 ```bash
 uv run simpleoauth2token authorize --client-credentials --provider brightspace \
-    --client-id YOUR_ID --client-secret YOUR_SECRET \
+    --client-id YOUR_ID \
+    --private-key working/keys/myServiceKey.pem --kid myServiceKey \
     --scopes "core:*:*" \
     --name brightspaceService
 ```
+
+Each assertion lives 60 seconds and carries a unique `jti`, per Brightspace's
+requirements; keys are ES256 (P-256) by default, and `--assertion-algorithm`
+selects another RSA/EC algorithm if you generated a different key type. API
+calls then run with the permissions of the linked service user.
 
 Any other provider that supports the grant works through `generic` —
 `--auth-url` is not needed because no authorization endpoint is ever visited:
@@ -257,6 +284,9 @@ for the browser, default 300), `--no-browser` (print the URL instead of
 opening a browser), `--manual` (headless mode, below),
 `--client-credentials` (service-to-service grant, no user — see
 [Client credentials](#client-credentials-service-to-service-no-user)),
+`--private-key PEM --kid KEYID` (authenticate with a JWT client assertion
+instead of `--client-secret`; Brightspace service users),
+`--assertion-algorithm` (default ES256),
 `--extra-auth-param KEY=VALUE` (repeatable).
 
 #### Headless servers: `simpleoauth2token authorize --manual`
@@ -291,7 +321,9 @@ with `--client-credentials` are renewed by re-running that grant.
 If a refresh that used to work starts failing with `invalid_client`, the
 client secret has likely been rotated or expired (Azure secrets always
 expire) — the error says so, and the fix is re-running `simpleoauth2token authorize`
-with current credentials.
+with current credentials. For assertion-authenticated tokens the same error
+means the provider could no longer validate the signature — check that the
+registered JWKS is still hosted and contains the key.
 
 ```bash
 uv run simpleoauth2token refresh --name myGoogle
@@ -330,6 +362,23 @@ List the supported provider presets.
 uv run simpleoauth2token providers
 ```
 
+### `simpleoauth2token keygen`
+
+Generate a signing keypair for providers that authenticate with JWT client
+assertions (Brightspace service users). Writes the private key
+(owner-read-only) and the public JWKS into `working/keys/`, prints the JWKS,
+and refuses to overwrite an existing key — regenerating a registered key
+would break every deployment still signing with it.
+
+```bash
+uv run simpleoauth2token keygen --kid myServiceKey
+uv run simpleoauth2token keygen --kid myRsaKey --algorithm RS256
+```
+
+Options: `--algorithm` (ES256 default, or ES384/ES512/RS256/RS384/RS512),
+`--out` (output directory, default `<working-dir>/keys`). Host the printed
+JWKS at an HTTPS URL and register that URL with your provider.
+
 ## Logging
 
 All operations log informational events (INFO, ERROR) to
@@ -341,6 +390,10 @@ saved, token refreshed, provider errors, and so on.
 - Token files under `working/tokens/` are saved owner-read-only (`0600`) and
   include the client id/secret so `simpleoauth2token refresh` works without re-prompting.
   Keep `working/` out of version control (it is gitignored here).
+- For JWT-assertion clients the token file stores only the private key's
+  *path*, key id, and algorithm — never the key material. `keygen` writes
+  private keys owner-read-only (`0600`) into `working/keys/`; the JWKS it
+  emits contains only the public key and is safe to host.
 - Token writes are atomic (owner-only temp file renamed into place), so
   concurrent processes sharing a working directory never read a partial
   token and the secrets are never on disk with wider permissions.

@@ -9,8 +9,10 @@ update the matching checklist here.
   - Covers: provider presets, token store persistence and permissions,
     logging service, HTTPS callback server (real TLS via trustme), client
     token exchange/refresh against a real local endpoint, the client
-    credentials grant (fetch, auto-renewal, CLI), mkcert certificate
-    generation, and the non-interactive CLI commands.
+    credentials grant (fetch, auto-renewal, CLI), JWT client assertions
+    (signing-key generation, JWKS output, assertion claims, signature
+    verification by the fake endpoint, key-path renewal), mkcert
+    certificate generation, and the non-interactive CLI commands.
 
 ## CLI walkthrough
 
@@ -66,8 +68,6 @@ credentials grant (Google is not supported for this grant).
 - [ ] `uv run simpleoauth2token authorize --client-credentials --provider microsoft --tenant <tenant> --client-id ... --client-secret ... --scopes "https://graph.microsoft.com/.default" --name serviceToken`
       prints `Token 'serviceToken' saved.` with an expiry and exits 0 —
       without opening a browser and without generating `working/certs/`.
-- [ ] Same with `--provider brightspace` and a Brightspace registration that
-      has the client credentials grant enabled.
 - [ ] `uv run simpleoauth2token status --name serviceToken` shows
       `Grant: client_credentials` and `Refresh token: absent`.
 - [ ] `uv run simpleoauth2token refresh --name serviceToken` renews the token by
@@ -76,6 +76,36 @@ credentials grant (Google is not supported for this grant).
       logged as ERROR.
 - [ ] `--provider generic` works with only `--token-url` (no `--auth-url`
       required).
+- [ ] `--client-secret` omitted (and no `--private-key`) exits 1 with an
+      error naming both options.
+
+### simpleoauth2token keygen + authorize --private-key (JWT client assertions)
+
+Brightspace service users authenticate with JWT client assertions instead of
+a client secret; see the README's Brightspace section for the registration
+steps.
+
+- [ ] `uv run simpleoauth2token keygen --kid myServiceKey` writes
+      `working/keys/myServiceKey.pem` with permissions `-rw-------` and
+      `working/keys/myServiceKey.jwks.json`, prints the JWKS with hosting
+      instructions, and exits 0.
+- [ ] Running the same command again exits 1 with an "already exists" error
+      and leaves the original key untouched.
+- [ ] `--algorithm RS256` produces an RSA key (`"kty": "RSA"` in the JWKS).
+- [ ] With the JWKS hosted and registered to a Brightspace client-credentials
+      app linked to a service user:
+      `uv run simpleoauth2token authorize --client-credentials --provider brightspace --client-id ... --private-key working/keys/myServiceKey.pem --kid myServiceKey --scopes "..." --name brightspaceService`
+      prints `Token 'brightspaceService' saved.` and exits 0 — no
+      `--client-secret` anywhere.
+- [ ] `uv run simpleoauth2token status --name brightspaceService` shows the
+      `Signing key:` line with the key path and kid.
+- [ ] `uv run simpleoauth2token refresh --name brightspaceService` renews by
+      re-signing a fresh assertion from the stored key path; exits 0.
+- [ ] `--private-key` without `--kid` exits 1 with an error naming `--kid`.
+- [ ] `--private-key` without `--client-credentials` exits 1 with an error
+      naming `--client-credentials`.
+- [ ] Signing with a key whose JWKS is *not* registered exits 1 with
+      `invalid_client` plus the JWKS hint.
 
 ### simpleoauth2token status
 
@@ -118,5 +148,8 @@ credentials grant (Google is not supported for this grant).
 - [ ] With `grantType="client_credentials"` and no saved token,
       `getAccessToken()` obtains a token on its own — no manual step, no
       browser — and renews it after expiry the same way.
+- [ ] Same with `privateKeyFile=...` and `keyId=...` in place of
+      `clientSecret` (JWT client assertion): `getAccessToken()` fetches and
+      renews with no manual step.
 - [ ] `getAccessToken(forceRefresh=True)` renews a token that has not
       expired yet (use after an API answers 401 for a revoked token).

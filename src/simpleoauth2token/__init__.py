@@ -20,6 +20,7 @@ Quick start::
 from .callbackServer import CallbackServer
 from .certs import ensureCertificates, isMkcertInstalled
 from .client import OAuth2Client
+from .clientAssertion import buildClientAssertion, generateSigningKey
 from .errors import OAuth2Error
 from .loggingService import getLogger
 from .providers import ProviderConfig, getProvider, listProviders
@@ -31,7 +32,9 @@ __all__ = [
     "OAuth2Error",
     "ProviderConfig",
     "TokenStore",
+    "buildClientAssertion",
     "ensureCertificates",
+    "generateSigningKey",
     "getLogger",
     "getProvider",
     "isExpired",

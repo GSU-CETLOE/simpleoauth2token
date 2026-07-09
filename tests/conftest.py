@@ -9,7 +9,10 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import jwt
 import pytest
+
+CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 
 class FakeTokenEndpointHandler(BaseHTTPRequestHandler):
@@ -22,7 +25,10 @@ class FakeTokenEndpointHandler(BaseHTTPRequestHandler):
         self.server.recordedRequests.append(params)  # type: ignore[attr-defined]
 
         grantType = params.get("grant_type")
-        clientAuthenticated = params.get("client_secret") == "testClientSecret"
+        clientAuthenticated = (
+            params.get("client_secret") == "testClientSecret"
+            or self.clientAssertionValid(params)
+        )
         if grantType in ("refresh_token", "client_credentials") and not clientAuthenticated:
             self.sendJson(400, {
                 "error": "invalid_client",
@@ -50,6 +56,34 @@ class FakeTokenEndpointHandler(BaseHTTPRequestHandler):
         else:
             self.sendJson(400, {"error": "invalid_grant"})
 
+    def clientAssertionValid(self, params: dict) -> bool:
+        """Verify a JWT client assertion the way a real provider would.
+
+        The signature is checked against the JWK registered on the endpoint
+        (see FakeTokenEndpoint.registerAssertionJwk), along with the audience,
+        issuer/subject, and required claims from RFC 7523.
+        """
+        registeredJwk = getattr(self.server, "assertionJwk", None)
+        assertion = params.get("client_assertion")
+        if registeredJwk is None or not assertion:
+            return False
+        if params.get("client_assertion_type") != CLIENT_ASSERTION_TYPE:
+            return False
+        tokenUrl = self.server.tokenUrl  # type: ignore[attr-defined]
+        try:
+            header = jwt.get_unverified_header(assertion)
+            claims = jwt.decode(
+                assertion,
+                jwt.PyJWK(registeredJwk).key,
+                algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+                audience=tokenUrl,
+                issuer="testClientId",
+                options={"require": ["exp", "iat", "jti"]},
+            )
+        except jwt.exceptions.PyJWTError:
+            return False
+        return header.get("kid") == registeredJwk.get("kid") and claims.get("sub") == "testClientId"
+
     def sendJson(self, status: int, payload: dict) -> None:
         """Write a JSON response with the given HTTP status."""
         body = json.dumps(payload).encode("utf-8")
@@ -69,8 +103,16 @@ class FakeTokenEndpoint:
     def __init__(self) -> None:
         self.httpServer = HTTPServer(("127.0.0.1", 0), FakeTokenEndpointHandler)
         self.httpServer.recordedRequests = []  # type: ignore[attr-defined]
+        self.httpServer.assertionJwk = None  # type: ignore[attr-defined]
+        # The handler validates assertion audiences against this URL.
+        self.httpServer.tokenUrl = self.tokenUrl  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.httpServer.serve_forever, daemon=True)
         self.thread.start()
+
+    def registerAssertionJwk(self, jwk: dict) -> None:
+        """Trust this public JWK for client assertions, as a provider does
+        when an administrator registers the application's JWKS URL."""
+        self.httpServer.assertionJwk = jwk  # type: ignore[attr-defined]
 
     @property
     def tokenUrl(self) -> str:

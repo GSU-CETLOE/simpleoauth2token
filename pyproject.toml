@@ -9,6 +9,7 @@ authors = [{ name = "Jeb Barger", email = "jebba2@gmail.com" }]
 keywords = ["oauth2", "oauth", "token", "mkcert", "client-credentials"]
 requires-python = ">=3.13"
 dependencies = [
+    "pyjwt[crypto]>=2.10",
     "requests>=2.32",
 ]
 
