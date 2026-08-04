@@ -80,7 +80,7 @@ uv add --editable /path/to/simpleoauth2token
 ```
 
 or install straight from the repository:
-`uv add git+https://github.com/jebba2/simpleoauth2token`.
+`uv add git+https://github.com/GSU-CETLOE/simpleoauth2token`.
 
 > **Note:** the project was deliberately named `simpleoauth2token` (not
 > `oauth2client`) to avoid colliding with Google's long-deprecated
