@@ -78,6 +78,7 @@ def runAuthorize(args: argparse.Namespace) -> int:
         tokenName=args.name,
         workingDir=args.workingDir,
         redirectPort=args.port,
+        redirectUri=args.redirectUri,
         tenant=args.tenant,
         extraAuthParams=parseExtraAuthParams(args.extraAuthParams),
         grantType=grantType,
@@ -241,6 +242,10 @@ def buildParser() -> argparse.ArgumentParser:
                            help="Token endpoint (generic provider only)")
     authorize.add_argument("--port", type=int, default=DEFAULT_CALLBACK_PORT,
                            help=f"Local HTTPS callback port (default: {DEFAULT_CALLBACK_PORT})")
+    authorize.add_argument("--redirect-uri", dest="redirectUri",
+                           help="Redirect URI exactly as registered with the provider, "
+                                "when it is not https://localhost:<port>/callback "
+                                "(overrides --port; a host other than localhost needs --manual)")
     authorize.add_argument("--timeout", type=float, default=300,
                            help="Seconds to wait for the browser callback (default: 300)")
     authorize.add_argument("--no-browser", dest="noBrowser", action="store_true",

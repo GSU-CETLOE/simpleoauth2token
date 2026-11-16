@@ -131,6 +131,17 @@ def test_manualAuthorizeRejectsWrongState(tokenEndpoint, tmp_path, capsys, monke
     assert TokenStore(workingDir=tmp_path / "working").load("headlessToken") is None
 
 
+def test_manualAuthorizeUsesRedirectUriOption(tokenEndpoint, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("goodCode\n"))
+    args = manualAuthorizeArgs(tokenEndpoint, tmp_path) + [
+        "--redirect-uri", "https://localhost:9443/oauth/return",
+    ]
+    exitCode = main(args)
+    assert exitCode == 0
+    assert "https://localhost:9443/oauth/return" in capsys.readouterr().out
+    assert tokenEndpoint.recordedRequests[-1]["redirect_uri"] == "https://localhost:9443/oauth/return"
+
+
 def clientCredentialsArgs(tokenEndpoint, tmp_path) -> list[str]:
     """CLI arguments for a client-credentials (no user) authorization.
 

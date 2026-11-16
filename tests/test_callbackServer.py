@@ -59,6 +59,18 @@ def test_redirectUriUsesHttpsLocalhostAndCallbackPath(tlsFiles):
         server.stop()
 
 
+def test_capturesCallbackOnCustomPath(tlsFiles):
+    certFile, keyFile, caFile = tlsFiles
+    server = CallbackServer(port=0, certFile=certFile, keyFile=keyFile, callbackPath="/oauth/return")
+    server.start()
+    try:
+        assert server.redirectUri.endswith("/oauth/return")
+        sendCallbackRequest(f"{server.redirectUri}?code=abc123&state=xyz789", caFile)
+        assert server.waitForCallback(timeoutSeconds=10) == {"code": "abc123", "state": "xyz789"}
+    finally:
+        server.stop()
+
+
 def test_providerErrorRaisesOAuth2Error(tlsFiles):
     certFile, keyFile, caFile = tlsFiles
     server = CallbackServer(port=0, certFile=certFile, keyFile=keyFile)

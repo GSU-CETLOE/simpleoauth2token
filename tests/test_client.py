@@ -8,7 +8,7 @@ import urllib.parse
 import jwt
 import pytest
 
-from simpleoauth2token.client import OAuth2Client
+from simpleoauth2token.client import OAuth2Client, callbackListenerAddress
 from simpleoauth2token.clientAssertion import CLIENT_ASSERTION_TYPE, generateSigningKey
 from simpleoauth2token.errors import OAuth2Error
 from simpleoauth2token.providers import ProviderConfig
@@ -64,6 +64,44 @@ def test_buildAuthorizationUrlContainsStandardParams(tokenEndpoint, tmp_path):
     assert params["state"] == "expectedState"
     assert params["scope"] == "openid email"
     assert params["redirect_uri"].startswith("https://localhost:")
+
+
+def test_buildAuthorizationUrlUsesConfiguredRedirectUri(tokenEndpoint, tmp_path):
+    client = makeClient(tokenEndpoint, tmp_path, redirectUri="https://localhost:9443/oauth/return")
+    url = client.buildAuthorizationUrl(state="s")
+    params = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+    assert params["redirect_uri"] == "https://localhost:9443/oauth/return"
+
+
+def test_redirectUriDefaultsToLocalhostCallbackOnRedirectPort(tokenEndpoint, tmp_path):
+    client = makeClient(tokenEndpoint, tmp_path, redirectPort=9000)
+    assert client.redirectUri == "https://localhost:9000/callback"
+
+
+def test_authorizeManualSendsConfiguredRedirectUri(tokenEndpoint, tmp_path, capsys):
+    client = makeClient(tokenEndpoint, tmp_path, redirectUri="https://tools.example.edu/oauth/return")
+    token = client.authorizeManual(promptInput=lambda prompt: "goodCode")
+    printed = capsys.readouterr().out
+    assert token["accessToken"] == "initialAccessToken"
+    assert urllib.parse.quote("https://tools.example.edu/oauth/return", safe="") in printed
+    assert tokenEndpoint.recordedRequests[-1]["redirect_uri"] == "https://tools.example.edu/oauth/return"
+
+
+def test_callbackListenerAddressReadsPortAndPath():
+    assert callbackListenerAddress("https://localhost:9443/oauth/return") == (9443, "/oauth/return")
+
+
+def test_callbackListenerAddressDefaultsToHttpsPortAndRootPath():
+    assert callbackListenerAddress("https://localhost") == (443, "/")
+
+
+@pytest.mark.parametrize("redirectUri", [
+    "https://tools.example.edu/oauth/return",
+    "http://localhost:8400/callback",
+])
+def test_callbackListenerAddressRejectsUrisTheLocalServerCannotServe(redirectUri):
+    with pytest.raises(OAuth2Error, match="--manual"):
+        callbackListenerAddress(redirectUri)
 
 
 def test_buildAuthorizationUrlIncludesExtraAuthParams(tokenEndpoint, tmp_path):

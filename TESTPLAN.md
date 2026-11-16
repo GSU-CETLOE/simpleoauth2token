@@ -43,6 +43,11 @@ Prerequisites: `uv sync` done; mkcert installed and `mkcert -install` run.
 - [ ] `--provider microsoft --tenant <tenant>` sends you to that tenant's
       login page.
 
+- [ ] `--redirect-uri https://localhost:8400/some/other/path` (registered
+      with the provider) completes the browser flow and saves the token.
+- [ ] `--redirect-uri https://example.com/callback` without `--manual` exits 1
+      and says to use `--manual`.
+
 ### simpleoauth2token authorize --manual (headless)
 
 Run these over SSH or in a terminal, treating it as a machine with no browser.

@@ -51,6 +51,21 @@ def parseCallbackInput(callbackInput: str) -> dict[str, str]:
     return {"code": callbackInput}
 
 
+def callbackListenerAddress(redirectUri: str) -> tuple[int, str]:
+    """Return the (port, path) the local callback server must listen on.
+
+    The browser flow can only catch a redirect sent to https://localhost,
+    so any other redirect URI is rejected with a pointer to --manual.
+    """
+    parsed = urllib.parse.urlparse(redirectUri)
+    if parsed.scheme != "https" or parsed.hostname != "localhost":
+        raise OAuth2Error(
+            f"The browser flow can only receive a redirect to https://localhost, "
+            f"not {redirectUri}. Use the manual flow (--manual) for this redirect URI."
+        )
+    return parsed.port or 443, parsed.path or "/"
+
+
 class OAuth2Client:
     """OAuth2 authorization-code client for Google, Microsoft, D2L Brightspace,
     or any provider described by a ProviderConfig.
@@ -75,6 +90,10 @@ class OAuth2Client:
     that authenticate with JWT client assertions instead of a secret
     (Brightspace service users) take privateKeyFile and keyId in place of
     clientSecret.
+
+    The redirect URI defaults to https://localhost:<redirectPort>/callback.
+    When the provider's app registration uses a different one, pass it as
+    redirectUri exactly as registered.
     """
 
     def __init__(
@@ -92,6 +111,7 @@ class OAuth2Client:
         privateKeyFile: str | Path | None = None,
         keyId: str | None = None,
         assertionAlgorithm: str = "ES256",
+        redirectUri: str | None = None,
     ) -> None:
         if grantType not in SUPPORTED_GRANT_TYPES:
             raise OAuth2Error(
@@ -117,7 +137,7 @@ class OAuth2Client:
         self.scopes = scopes.split() if isinstance(scopes, str) else list(scopes)
         self.tokenName = tokenName
         self.workingDir = Path(workingDir)
-        self.redirectPort = redirectPort
+        self.redirectUri = redirectUri or f"https://localhost:{redirectPort}/callback"
         self.extraAuthParams = dict(extraAuthParams or {})
         self.privateKeyFile = privateKeyFile
         self.keyId = keyId
@@ -128,7 +148,7 @@ class OAuth2Client:
     def buildAuthorizationUrl(self, state: str, redirectUri: str | None = None) -> str:
         """Return the provider URL the user must visit to grant access."""
         if redirectUri is None:
-            redirectUri = f"https://localhost:{self.redirectPort}/callback"
+            redirectUri = self.redirectUri
         params = {
             "response_type": "code",
             "client_id": self.clientId,
@@ -146,15 +166,16 @@ class OAuth2Client:
         provider's consent page, waits for the redirect, and exchanges the
         authorization code for a token.
         """
+        port, callbackPath = callbackListenerAddress(self.redirectUri)
         certFile, keyFile = ensureCertificates(workingDir=self.workingDir)
-        server = CallbackServer(port=self.redirectPort, certFile=certFile, keyFile=keyFile)
+        server = CallbackServer(port=port, certFile=certFile, keyFile=keyFile, callbackPath=callbackPath)
         server.start()
         try:
             state = secrets.token_urlsafe(32)
-            authorizationUrl = self.buildAuthorizationUrl(state=state, redirectUri=server.redirectUri)
+            authorizationUrl = self.buildAuthorizationUrl(state=state)
             self.logger.info(
                 "authorization started for provider '%s' (token '%s'), listening on %s",
-                self.provider.name, self.tokenName, server.redirectUri,
+                self.provider.name, self.tokenName, self.redirectUri,
             )
             print(f"Open this URL in your browser to authorize:\n\n  {authorizationUrl}\n")
             if openBrowser:
@@ -166,7 +187,7 @@ class OAuth2Client:
             code = callback.get("code")
             if not code:
                 raise OAuth2Error("Provider callback did not include an authorization code")
-            return self.exchangeCodeForToken(code, redirectUri=server.redirectUri)
+            return self.exchangeCodeForToken(code, redirectUri=self.redirectUri)
         finally:
             server.stop()
 
@@ -178,8 +199,8 @@ class OAuth2Client:
         terminal. Needs no local browser, callback server, or mkcert.
         """
         state = secrets.token_urlsafe(32)
-        redirectUri = f"https://localhost:{self.redirectPort}/callback"
-        authorizationUrl = self.buildAuthorizationUrl(state=state, redirectUri=redirectUri)
+        redirectUri = self.redirectUri
+        authorizationUrl = self.buildAuthorizationUrl(state=state)
         self.logger.info(
             "manual authorization started for provider '%s' (token '%s')",
             self.provider.name, self.tokenName,

@@ -55,7 +55,8 @@ uv sync
 1. Register an application with your provider and note the **client id** and
    **client secret**.
 2. Add the redirect URI `https://localhost:8400/callback` to the app
-   registration (adjust the port if you pass `--port`).
+   registration (adjust the port if you pass `--port`). If the registration
+   already uses a different redirect URI, pass it with `--redirect-uri`.
 3. Run `simpleoauth2token authorize`. Your browser opens the provider's consent page;
    after you approve, the token is captured and saved to `working/tokens/`.
 
@@ -279,7 +280,10 @@ uv run simpleoauth2token authorize --provider generic \
     --scopes "some.scope" --name myProvider
 ```
 
-Options: `--port` (callback port, default 8400), `--timeout` (seconds to wait
+Options: `--port` (callback port, default 8400), `--redirect-uri` (the
+redirect URI exactly as registered with the provider, when it is not
+`https://localhost:<port>/callback`; overrides `--port`, and a host other than
+localhost only works with `--manual`), `--timeout` (seconds to wait
 for the browser, default 300), `--no-browser` (print the URL instead of
 opening a browser), `--manual` (headless mode, below),
 `--client-credentials` (service-to-service grant, no user — see
